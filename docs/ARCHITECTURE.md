@@ -18,7 +18,7 @@ Modern cloud-native applications rely on complex microservice topologies where f
 
 ## 2. High-Level Architecture Diagram
 
-![High-Level Architecture Diagram](./hld)
+![High-Level Architecture Diagram](./hld.png)
 
 ---
 
