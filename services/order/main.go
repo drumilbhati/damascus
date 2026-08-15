@@ -18,8 +18,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
+// Prometheus RED Metrics with bounded route label
 var (
 	httpRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -102,6 +105,9 @@ func NewOrderServer(cfg Config) (*OrderServer, error) {
 		}
 	}
 
+	// Register global W3C Trace Context Propagator
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
 	tr := otelhttp.NewTransport(http.DefaultTransport)
 	client := &http.Client{
 		Transport: tr,
@@ -126,6 +132,10 @@ func (s *OrderServer) callDownstream(ctx context.Context, method, targetURL stri
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("downstream service returned non-2xx status code: %d", resp.StatusCode)
+	}
+
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
@@ -139,33 +149,44 @@ func (s *OrderServer) callDownstream(ctx context.Context, method, targetURL stri
 }
 
 func (s *OrderServer) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
+	// Require POST method
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+
 	ctx := r.Context()
 	orderID := fmt.Sprintf("ord_%d", time.Now().UnixNano())
+	orderStatus := "CONFIRMED"
 
-	// 1. Call Payment Service
-	paymentRes, err := s.callDownstream(ctx, "POST", s.cfg.PaymentServiceURL+"/pay")
+	// 1. Call Payment Service (POST /pay)
+	paymentRes, err := s.callDownstream(ctx, http.MethodPost, s.cfg.PaymentServiceURL+"/pay")
 	if err != nil {
 		log.Printf("[WARN] Payment service call failed: %v", err)
-		paymentRes = map[string]interface{}{"status": "degraded", "error": err.Error()}
+		paymentRes = map[string]interface{}{"status": "degraded", "error": "SERVICE_UNAVAILABLE"}
+		orderStatus = "DEGRADED"
 	}
 
-	// 2. Call Inventory Service
-	inventoryRes, err := s.callDownstream(ctx, "POST", s.cfg.InventoryServiceURL+"/stock")
+	// 2. Call Inventory Service (POST /stock)
+	inventoryRes, err := s.callDownstream(ctx, http.MethodPost, s.cfg.InventoryServiceURL+"/stock")
 	if err != nil {
 		log.Printf("[WARN] Inventory service call failed: %v", err)
-		inventoryRes = map[string]interface{}{"status": "degraded", "error": err.Error()}
+		inventoryRes = map[string]interface{}{"status": "degraded", "error": "SERVICE_UNAVAILABLE"}
+		orderStatus = "DEGRADED"
 	}
 
-	// 3. Call Recommendation Service
-	recRes, err := s.callDownstream(ctx, "GET", s.cfg.RecommendationServiceURL+"/recommend")
+	// 3. Call Recommendation Service (GET /recommend)
+	recRes, err := s.callDownstream(ctx, http.MethodGet, s.cfg.RecommendationServiceURL+"/recommend")
 	if err != nil {
 		log.Printf("[WARN] Recommendation service call failed: %v", err)
-		recRes = map[string]interface{}{"status": "degraded", "error": err.Error()}
+		recRes = map[string]interface{}{"status": "degraded", "error": "SERVICE_UNAVAILABLE"}
+		orderStatus = "DEGRADED"
 	}
 
 	response := OrderResponse{
 		OrderID:        orderID,
-		Status:         "CONFIRMED",
+		Status:         orderStatus,
 		Payment:        paymentRes,
 		Inventory:      inventoryRes,
 		Recommendation: recRes,
@@ -191,7 +212,7 @@ func (s *OrderServer) Routes() http.Handler {
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/orders", s.handleCreateOrder)
 
-	// Metrics logging middleware
+	// Bounded route label metrics middleware
 	metricsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
@@ -201,11 +222,21 @@ func (s *OrderServer) Routes() http.Handler {
 		duration := time.Since(start).Seconds()
 		code := strconv.Itoa(rw.statusCode)
 
-		httpRequestsTotal.WithLabelValues(r.Method, r.URL.Path, code).Inc()
-		httpRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration)
+		// Bound label cardinality: map recognized routes
+		route := "not_found"
+		switch r.URL.Path {
+		case "/healthz":
+			route = "/healthz"
+		case "/metrics":
+			route = "/metrics"
+		case "/orders":
+			route = "/orders"
+		}
+
+		httpRequestsTotal.WithLabelValues(r.Method, route, code).Inc()
+		httpRequestDuration.WithLabelValues(r.Method, route).Observe(duration)
 	})
 
-	// Wrap with OpenTelemetry HTTP middleware
 	return otelhttp.NewHandler(metricsHandler, "order-service")
 }
 
