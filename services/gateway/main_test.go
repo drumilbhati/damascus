@@ -7,6 +7,34 @@ import (
 	"testing"
 )
 
+func TestURLValidation(t *testing.T) {
+	invalidURLs := []string{
+		"invalid-no-scheme",
+		"ftp://example.com",
+		"http://",
+		"",
+	}
+
+	for _, invalidURL := range invalidURLs {
+		_, err := NewGatewayHandler(invalidURL)
+		if err == nil {
+			t.Errorf("expected error for invalid URL %q, got nil", invalidURL)
+		}
+	}
+
+	validURLs := []string{
+		"http://localhost:8082",
+		"https://order-service.prod:8443",
+	}
+
+	for _, validURL := range validURLs {
+		_, err := NewGatewayHandler(validURL)
+		if err != nil {
+			t.Errorf("expected no error for valid URL %q, got %v", validURL, err)
+		}
+	}
+}
+
 func TestHealthCheckEndpoint(t *testing.T) {
 	handler, err := NewGatewayHandler("http://localhost:9999")
 	if err != nil {
@@ -32,8 +60,23 @@ func TestHealthCheckEndpoint(t *testing.T) {
 	}
 }
 
+func TestMetricsEndpoint(t *testing.T) {
+	handler, err := NewGatewayHandler("http://localhost:9999")
+	if err != nil {
+		t.Fatalf("failed to create gateway handler: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200 OK, got %d", rec.Code)
+	}
+}
+
 func TestOrderProxying(t *testing.T) {
-	// Mock downstream Order Service
 	mockOrderService := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

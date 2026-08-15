@@ -10,9 +10,44 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
+
+var (
+	httpRequestsTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gateway_http_requests_total",
+			Help: "Total number of HTTP requests processed by the API Gateway.",
+		},
+		[]string{"method", "handler", "code"},
+	)
+
+	httpRequestDuration = promauto.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "gateway_http_request_duration_seconds",
+			Help:    "HTTP request latency histogram in seconds for the API Gateway.",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"method", "handler"},
+	)
+)
+
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
 
 type Config struct {
 	Port            string
@@ -40,7 +75,19 @@ func NewGatewayHandler(orderServiceURL string) (http.Handler, error) {
 		return nil, fmt.Errorf("invalid order service URL: %w", err)
 	}
 
+	if targetURL.Scheme != "http" && targetURL.Scheme != "https" {
+		return nil, fmt.Errorf("invalid order service URL scheme: %s (must be http or https)", targetURL.Scheme)
+	}
+	if targetURL.Host == "" {
+		return nil, fmt.Errorf("invalid order service URL: host cannot be empty")
+	}
+
 	proxy := httputil.NewSingleHostReverseProxy(targetURL)
+
+	// Configure cloned Transport with ResponseHeaderTimeout and explicit timeouts
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 10 * time.Second
+	proxy.Transport = transport
 
 	mux := http.NewServeMux()
 
@@ -54,13 +101,35 @@ func NewGatewayHandler(orderServiceURL string) (http.Handler, error) {
 		})
 	})
 
+	// Prometheus metrics endpoint
+	mux.Handle("/metrics", promhttp.Handler())
+
 	// Reverse proxy forwarding /api/orders to Order Service
 	mux.HandleFunc("/api/orders", func(w http.ResponseWriter, r *http.Request) {
 		r.Host = targetURL.Host
 		proxy.ServeHTTP(w, r)
 	})
 
-	return mux, nil
+	// Wrap mux with metrics logging middleware
+	metricsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rw := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+
+		mux.ServeHTTP(rw, r)
+
+		duration := time.Since(start).Seconds()
+		handlerPath := r.URL.Path
+		method := r.Method
+		code := strconv.Itoa(rw.statusCode)
+
+		httpRequestsTotal.WithLabelValues(method, handlerPath, code).Inc()
+		httpRequestDuration.WithLabelValues(method, handlerPath).Observe(duration)
+	})
+
+	// Wrap with OpenTelemetry HTTP middleware
+	otelHandler := otelhttp.NewHandler(metricsHandler, "api-gateway")
+
+	return otelHandler, nil
 }
 
 func main() {
