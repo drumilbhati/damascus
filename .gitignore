@@ -1,0 +1,14 @@
+# Root Binaries
+/gateway
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
