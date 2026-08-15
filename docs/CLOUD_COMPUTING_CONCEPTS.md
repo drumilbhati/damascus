@@ -4,57 +4,107 @@
 
 ---
 
-## 1. Overview & Cloud Relevance
+## 1. Overview & Refined Value Proposition
 
-DAMASCUS is designed specifically as an enterprise-grade cloud-native control plane system. It addresses core challenges in distributed systems engineering: **capacity planning**, **cascading degradation**, **observability-driven autoscaling evaluation**, and **resilient feedback loops**.
+Traditional load testing tools (like JMeter or k6) act as black boxes: they blindly hit a single pre-configured URL with traffic without any knowledge of the underlying microservice topology, internal single points of failure (SPOFs), or downstream database dependencies.
+
+**DAMASCUS is an internal chaos-testing and resilience-analysis platform for teams operating microservice systems.**
+
+Instead of operating blindly, teams instrument their microservices with OpenTelemetry and give DAMASCUS access to the observability data and target environment. DAMASCUS then automatically:
+1. **Discovers Telemetry**: Parses OpenTelemetry distributed traces (`Gateway -> Order -> Payment / Inventory -> Database`).
+2. **Builds Service Graph**: Reconstructs the full dependency tree with call frequencies.
+3. **Ranks Criticality**: Calculates mathematical criticality scores ($S(v)$) to identify structurally critical microservices.
+4. **Intelligently Selects Targets**: Recommends high-value resilience targets instead of random testing.
+5. **Executes Controlled Load**: Increases traffic in stepped increments while enforcing a sub-second closed-loop safety stop.
+6. **Analyzes Capacity & Recovery**: Reports sustainable capacity limits, degradation points, and post-stress recovery duration.
 
 ---
 
-## 2. Key Cloud Computing Patterns Implemented
+## 2. The Mental Model
 
-### 2.1 Autonomous Control Loops (MAPE-K Framework)
-In cloud computing, autonomous systems rely on the **Monitor-Analyze-Plan-Execute over Knowledge** (MAPE-K) feedback loop:
-- **Monitor**: `WatcherEngine` scrapes real-time telemetry from Prometheus.
-- **Analyze**: `SafetyController` compares empirical metric snapshots against non-functional SLA invariants.
+```text
+                                Application Environment
+                    
+                        ┌─────────┐      ┌─────────┐
+                        │ Gateway │─────>│  Order  │
+                        └─────────┘      └────┬────┘
+                                              │
+                                    ┌─────────┴─────────┐
+                                    v                   v
+                               ┌─────────┐        ┌─────────┐
+                               │ Payment │        │Inventory│
+                               └────┬────┘        └─────────┘
+                                    │
+                                    v
+                               ┌─────────┐
+                               │   DB    │
+                               └─────────┘
+                                    │
+                       OpenTelemetry Spans & Metrics
+                                    │
+                                    v
+                            DAMASCUS Control Plane
+                                    │
+                         ┌──────────┴──────────┐
+                         v                     v
+                 Trace Collector        WatcherEngine
+                         │                     │
+                         v                     v
+                  GraphAnalyser         Prometheus
+                         │                     │
+                         v                     v
+                Criticality Ranking     SafetyController
+                         │                     │
+                         v                     v
+                  Target Selection ────> StressEngine
+```
+
+---
+
+## 3. Why This Framing Makes the Project Stronger Academically
+
+### 3.1 Access to Proprietary Internal Telemetry
+Because DAMASCUS integrates directly with OpenTelemetry traces and Prometheus time-series metrics, it possesses **internal topological knowledge that a black-box load tester fundamentally cannot obtain**.
+
+From traces, DAMASCUS sees the exact call paths:
+```text
+Service       Criticality Score   Primary Reason
+--------------------------------------------------------------------------
+Order             0.92            High in-degree + checkout orchestrator
+Payment           0.88            Single point of failure for order completion
+Database          0.81            Shared downstream storage bottleneck
+Gateway           0.63            Entry pass-through
+Inventory         0.41            Leaf read dependency
+```
+
+Instead of random load testing:
+$$\text{random service} \longrightarrow \text{stress}$$
+
+DAMASCUS makes an intelligent recommendation:
+> **"Payment Service is structurally critical (Score: 0.88) and represents a high-value resilience target. Stress test Payment Service first."**
+
+---
+
+## 4. Key Cloud Computing Patterns Implemented
+
+### 4.1 Autonomous Control Loops (MAPE-K Framework)
+- **Monitor**: `WatcherEngine` scrapes real-time RED metrics from Prometheus.
+- **Analyze**: `SafetyController` evaluates latency (P95/P99), error rates, and availability against non-functional SLA invariants.
 - **Plan**: `ExperimentManager` updates state machine and prepares cancellation signals.
 - **Execute**: `StressEngine` workers adapt or abort traffic generation in real time.
 - **Knowledge**: `PostgreSQL` + `Kafka` preserve historical trace scores, degradation points, and telemetry history.
 
-```mermaid
-flowchart TD
-    M["Monitor (WatcherEngine / Prometheus)"] --> A["Analyze (SafetyController)"]
-    A --> P["Plan (ExperimentManager)"]
-    P --> E["Execute (StressEngine / Go Context)"]
-    E --> K[("Knowledge (Postgres & Kafka)")]
-    K --> M
-```
-
-### 2.2 Control Plane vs. Data Plane Decomposition
-Similar to Kubernetes (`kube-apiserver` / `etcd` vs. worker node Pods) or Service Meshes (Istio Control Plane vs. Envoy Data Plane proxies):
+### 4.2 Control Plane vs. Data Plane Decomposition
 - **Control Plane**: DAMASCUS Go control process runs orchestrators, scoring algorithms, and analysis engines without handling production end-user requests.
-- **Data Plane**: The microservices mesh under test handles data requests. Stress testing occurs over the data plane while monitoring occurs via sidecars/telemetry agents.
-
-### 2.3 Cascading Failure & Blast Radius Management
-Microservices suffer from catastrophic propagation of failure (e.g. latency backpressure upstream when a database connection pool is exhausted downstream). 
-- DAMASCUS's **Dependency Graph Criticality Scoring** isolates high-impact single points of failure (SPOFs) before performing load tests.
-- **Circuit Breaking via Context Cancellation**: Prevents uncontrolled stress tests from bringing down the entire cluster.
-
-### 2.4 Cloud Observability & Telemetry Integration
-- **Metrics (Prometheus)**: Time-series scraping of RED metrics (Rate, Errors, Duration) and USE metrics (Utilization, Saturation, Errors).
-- **Traces (OpenTelemetry)**: Distributed context propagation allowing automatic graph topology construction.
-
-### 2.5 Horizontal Pod Autoscaler (HPA) vs. Capacity Bounds
-When deploying target microservices on Kubernetes with HPA enabled:
-- DAMASCUS evaluates the lag between **traffic spike $\rightarrow$ HPA pod creation $\rightarrow$ pod readiness $\rightarrow$ latency stabilization**.
-- Demonstrates whether auto-scaling keeps up with step-rate load increases or if rate limits are breached prior to pod initialization.
+- **Data Plane**: The target microservices mesh handles user traffic while emitting traces/metrics to sidecars and collectors.
 
 ---
 
-## 3. Comparative Matrix: Traditional Load Testing vs. DAMASCUS
+## 5. Comparative Matrix: Traditional Load Testing vs. DAMASCUS
 
 | Capability | Traditional Tools (JMeter, Locust, k6) | DAMASCUS Platform |
 | :--- | :--- | :--- |
-| **Topology Awareness** | Black-box / None (hits pre-configured URLs) | **Full Dependency Graph** derived from telemetry |
+| **Topology Awareness** | Black-box / None (hits pre-configured URLs) | **Full Dependency Graph** derived from OpenTelemetry traces |
 | **Target Selection** | Manual / Arbitrary | **Automated Criticality Ranking** (In-degree, PageRank, SPOF) |
 | **Safety Mechanisms** | Script timeout or manual cancellation | **Autonomous Closed-Loop Safety Controller** (Sub-second context stop) |
 | **Degradation Detection** | Static post-test manual chart inspection | **Automated Capacity & Recovery Threshold Analysis** |
@@ -62,9 +112,6 @@ When deploying target microservices on Kubernetes with HPA enabled:
 
 ---
 
-## 4. Evaluation Metrics for Course Defense
+## 6. End-to-End Story for Course Defense
 
-1. **Topological Scoring Accuracy**: Verifying that core shared dependencies (e.g. `Payment` or `Database`) receive higher criticality scores than peripheral leaf services (e.g. `Recommendation`).
-2. **Safety Stop Reaction Time**: Measuring milliseconds elapsed between Prometheus metric breach and zero traffic output from `StressEngine`.
-3. **Recovery Time Objective (RTO)**: Measuring duration required for microservice P95 latency to return to baseline after stress engine shutdown.
-4. **HPA Convergence Lag**: Analyzing system degradation when load ramp rate exceeds Kubernetes container spinning speed.
+**Observability $\longrightarrow$ Distributed Tracing $\longrightarrow$ Graph Analysis $\longrightarrow$ Intelligent Target Selection $\longrightarrow$ Distributed Load Generation $\longrightarrow$ Real-Time Monitoring $\longrightarrow$ Automatic Safety Stop $\longrightarrow$ Capacity Analysis.**

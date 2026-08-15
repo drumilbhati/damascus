@@ -2,27 +2,51 @@
 
 > **Cloud Computing Course Project**
 
-DAMASCUS is a cloud-native distributed control plane that identifies critical microservices from dependency telemetry, safely stress-tests them with step load plans, observes performance via real-time telemetry, enforces closed-loop emergency stops upon SLA breach, and analyzes sustainable capacity bounds and recovery times.
+**DAMASCUS is an internal chaos-testing and resilience-analysis platform for engineering teams operating microservice systems. Teams instrument their services with OpenTelemetry, provide DAMASCUS access to the environment telemetry, and DAMASCUS automatically builds a dependency-aware model, identifies structurally critical microservices, executes controlled load/fault experiments, and reports sustainable capacity limits and recovery bottlenecks.**
+
+---
+
+## 💡 Core Mental Model
+
+```
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │                      Instrumented Microservice Environment            │
+ │                                                                        │
+ │   [ Gateway ] ────> [ Order ] ────> [ Payment ] ───> [ Database ]      │
+ │                                 └─> [ Inventory ]                      │
+ └────────────────────────────────────┬───────────────────────────────────┘
+                                      │
+                         OpenTelemetry & Prometheus
+                                      │
+                                      v
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │                      DAMASCUS Control Platform                         │
+ │                                                                        │
+ │ Discover Telemetry ──> Build Dependency Graph ──> Rank Criticality     │
+ │                                                         │              │
+ │ Report & Recovery <── Calculate Capacity <── Safety Stop <── Load Test  │
+ └────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## 📚 Project Documentation
 
-The project design and technical specifications are structured into detailed documentation modules:
+The technical design and specifications are structured into detailed modules:
 
-- **[System Architecture (`docs/ARCHITECTURE.md`)](docs/ARCHITECTURE.md)**: High-level architectural overview, control plane vs. data plane decomposition, component topology, and core workflows.
-- **[Low-Level Design (`docs/LLD.md`)](docs/LLD.md)**: Complete Go domain models, interface contracts, state machine specifications, concurrency & context cancellation paths, graph scoring algorithms, database schemas, and REST API specifications.
-- **[Cloud Computing Concepts (`docs/CLOUD_COMPUTING_CONCEPTS.md`)](docs/CLOUD_COMPUTING_CONCEPTS.md)**: Academic mapping to core cloud principles including autonomous MAPE-K control loops, resilience, blast radius control, and HPA evaluation.
-- **[Implementation Roadmap (`docs/IMPLEMENTATION_PLAN.md`)](docs/IMPLEMENTATION_PLAN.md)**: Phase-by-phase execution plan from target microservice mesh to Kubernetes deployment.
+- **[System Architecture (`docs/ARCHITECTURE.md`)](docs/ARCHITECTURE.md)**: Control plane vs. data plane decomposition, telemetry integration flow, and core MAPE-K control loop.
+- **[Low-Level Design (`docs/LLD.md`)](docs/LLD.md)**: Go domain models, interface contracts, 8-state machine, criticality scoring formula, database DDLs, and REST API specifications.
+- **[Cloud Computing Concepts (`docs/CLOUD_COMPUTING_CONCEPTS.md`)](docs/CLOUD_COMPUTING_CONCEPTS.md)**: Academic mapping to core cloud principles (Observability $\rightarrow$ Traces $\rightarrow$ Graph Analysis $\rightarrow$ Intelligent Target Selection $\rightarrow$ Closed-Loop Safety Stop).
+- **[Implementation Roadmap (`docs/IMPLEMENTATION_PLAN.md`)](docs/IMPLEMENTATION_PLAN.md)**: Step-by-step 14-phase roadmap from target microservice mesh to Kubernetes deployment.
 
 ---
 
 ## 🏗️ System Components
 
-1. **`ExperimentManager`**: Central orchestrator managing the 8-state experiment lifecycle.
-2. **`GraphAnalyser`**: Telemetry-driven dependency graph analyzer & criticality ranker.
+1. **`GraphAnalyser`**: Telemetry-driven dependency graph builder & criticality ranker.
+2. **`ExperimentManager`**: Central orchestrator managing the 8-state experiment lifecycle.
 3. **`StressEngine`**: Context-aware HTTP worker pool load generator.
-4. **`WatcherEngine`**: Prometheus time-series metric poller.
+4. **`WatcherEngine`**: Prometheus real-time metric poller.
 5. **`SafetyController`**: Sub-second closed-loop emergency safety stop controller.
 6. **`CapacityAnalyzer`**: Deterministic throughput limit and recovery duration analyzer.
 7. **`ReportEngine`**: Multi-format report builder (JSON / HTML).
@@ -31,8 +55,8 @@ The project design and technical specifications are structured into detailed doc
 
 ---
 
-## ⚡ Quick Navigation & Core Flow
+## ⚡ Core Operational Pipeline
 
 ```
-FIND (GraphAnalyser) -> TEST (StressEngine) -> MONITOR (WatcherEngine) -> PROTECT (SafetyController) -> ANALYZE (CapacityAnalyzer) -> REPORT (ReportEngine)
+Discover Telemetry -> Build Graph -> Rank Criticality -> Select Target -> Controlled Load -> Observe Metrics -> Safety Stop -> Capacity Analysis -> Report
 ```
