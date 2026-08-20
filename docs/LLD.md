@@ -5,28 +5,45 @@
 ---
 
 ## Table of Contents
-1. [Domain Models & Data Structures](#1-domain-models--data-structures)
-2. [Go Interface Specifications](#2-go-interface-specifications)
-3. [Experiment State Machine](#3-experiment-state-machine)
-4. [Concurrency & Context Cancellation Model](#4-concurrency--context-cancellation-model)
-5. [Graph Analysis & Criticality Scoring Engine](#5-graph-analysis--criticality-scoring-engine)
-6. [Safety Controller & Health Evaluation](#6-safety-controller--health-evaluation)
-7. [Kafka Event Backbone & Messaging Schema](#7-kafka-event-backbone--messaging-schema)
-8. [PostgreSQL Storage Schema (DDL)](#8-postgresql-storage-schema-ddl)
-9. [REST API Specification](#9-rest-api-specification)
+1. [Target Environment & Observability Configuration](#1-target-environment--observability-configuration)
+2. [Domain Models & Data Structures](#2-domain-models--data-structures)
+3. [Go Interface Specifications](#3-go-interface-specifications)
+4. [Experiment State Machine](#4-experiment-state-machine)
+5. [Concurrency & Fast-Path Context Cancellation](#5-concurrency--fast-path-context-cancellation)
+6. [Graph Analysis & Criticality Scoring Engine](#6-graph-analysis--criticality-scoring-engine)
+7. [Safety Controller & Health Evaluation](#7-safety-controller--health-evaluation)
+8. [Kafka Event Backbone & Messaging Schema](#8-kafka-event-backbone--messaging-schema)
+9. [PostgreSQL Storage Schema (DDL)](#9-postgresql-storage-schema-ddl)
+10. [REST API Specification](#10-rest-api-specification)
 
 ---
 
-## 1. Domain Models & Data Structures
+## 1. Target Environment & Observability Configuration
 
-### 1.1 Experiment Core Types
+DAMASCUS targets external microservice environments (such as the **OpenTelemetry Astronomy Shop Demo** or enterprise meshes) by interacting through standard observability endpoints:
+
+```go
+package config
+
+type TargetEnvironmentConfig struct {
+	TargetBaseURL       string `json:"target_base_url"`       // e.g. http://frontend:8080 or http://localhost:8080
+	JaegerTraceBaseURL  string `json:"jaeger_trace_base_url"`  // e.g. http://jaeger:16686
+	PrometheusBaseURL   string `json:"prometheus_base_url"`   // e.g. http://prometheus:9090
+	KafkaBrokers        string `json:"kafka_brokers"`         // e.g. localhost:9092
+	PostgresDSN         string `json:"postgres_dsn"`          // e.g. postgres://user:pass@localhost:5432/damascus
+}
+```
+
+---
+
+## 2. Domain Models & Data Structures
+
+### 2.1 Experiment Core Types
 
 ```go
 package experiment
 
-import (
-	"time"
-)
+import "time"
 
 type ExperimentState string
 
@@ -62,6 +79,7 @@ type ExperimentConfig struct {
 type Experiment struct {
 	ID            string           `json:"id"`
 	TargetService string           `json:"target_service"`
+	TargetURL     string           `json:"target_url"`
 	Type          ExperimentType   `json:"type"`
 	Config        ExperimentConfig `json:"config"`
 	State         ExperimentState  `json:"state"`
@@ -72,13 +90,14 @@ type Experiment struct {
 }
 ```
 
-### 1.2 Graph & Dependency Types
+### 2.2 Graph & Dependency Types
 
 ```go
 package graph
 
 type ServiceNode struct {
-	Name string `json:"name"`
+	Name      string            `json:"name"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
 }
 
 type DependencyEdge struct {
@@ -90,7 +109,7 @@ type DependencyEdge struct {
 
 type DependencyGraph struct {
 	Nodes map[string]*ServiceNode `json:"nodes"`
-	Edges []DependencyEdge         `json:"edges"`
+	Edges []DependencyEdge        `json:"edges"`
 }
 
 type ServiceScore struct {
@@ -100,7 +119,7 @@ type ServiceScore struct {
 }
 ```
 
-### 1.3 Stress Engine Types
+### 2.3 Stress Engine Types
 
 ```go
 package stress
@@ -109,6 +128,8 @@ import "time"
 
 type LoadPlan struct {
 	TargetURL    string        `json:"target_url"`
+	Method       string        `json:"method"` // GET, POST, etc.
+	Payload      []byte        `json:"payload,omitempty"`
 	InitialRate  int           `json:"initial_rate"`
 	StepRate     int           `json:"step_rate"`
 	MaxRate      int           `json:"max_rate"`
@@ -116,7 +137,7 @@ type LoadPlan struct {
 }
 ```
 
-### 1.4 Watcher & Metric Types
+### 2.4 Watcher & Metric Snapshot Types
 
 ```go
 package watcher
@@ -125,6 +146,7 @@ import "time"
 
 type MetricSnapshot struct {
 	ExperimentID      string    `json:"experiment_id"`
+	TargetService     string    `json:"target_service"`
 	Timestamp         time.Time `json:"timestamp"`
 	RequestRate       float64   `json:"request_rate"`
 	P50LatencyMs      float64   `json:"p50_latency_ms"`
@@ -137,14 +159,14 @@ type MetricSnapshot struct {
 }
 ```
 
-### 1.5 Safety Types
+### 2.5 Safety Types
 
 ```go
 package safety
 
 type SafetyPolicy struct {
 	MaxP95LatencyMs float64 `json:"max_p95_latency_ms"`
-	MaxErrorRate    float64 `json:"max_error_rate"` // e.g. 0.05 for 5%
+	MaxErrorRate    float64 `json:"max_error_rate"`    // e.g. 0.05 for 5%
 	MinAvailability float64 `json:"min_availability"` // e.g. 0.99 for 99%
 }
 
@@ -154,7 +176,7 @@ type SafetyDecision struct {
 }
 ```
 
-### 1.6 Capacity & Reporting Types
+### 2.6 Capacity & Report Types
 
 ```go
 package capacity
@@ -188,7 +210,7 @@ type ExperimentReport struct {
 	DegradationRate        int            `json:"degradation_rate"`
 	SafetyBoundaryRate     int            `json:"safety_boundary_rate"`
 	RecoveryTime           time.Duration  `json:"recovery_time"`
-	Observations           []string       `json:"observations"`
+	Observations           []Observation  `json:"observations"`
 	Recommendations        []string       `json:"recommendations"`
 	GeneratedAt            time.Time      `json:"generated_at"`
 }
@@ -196,60 +218,65 @@ type ExperimentReport struct {
 
 ---
 
-## 2. Go Interface Specifications
-
-To maintain strict loose coupling and testability, DAMASCUS components interact via standard Go interfaces:
+## 3. Go Interface Specifications
 
 ```go
-package damascus
+package interfaces
 
 import (
 	"context"
-	"time"
+	"damascus/internal/capacity"
+	"damascus/internal/events"
+	"damascus/internal/experiment"
+	"damascus/internal/graph"
+	"damascus/internal/safety"
+	"damascus/internal/stress"
+	"damascus/internal/watcher"
 )
 
-// GraphAnalyzer analyzes dependency telemetry and ranks services by criticality score
+// GraphAnalyzer extracts traces from Jaeger / OTel and ranks service criticality
 type GraphAnalyzer interface {
-	Analyze(ctx context.Context) ([]graph.ServiceScore, error)
-	GetGraph(ctx context.Context) (*graph.DependencyGraph, error)
+	BuildGraph(ctx context.Context, lookbackDuration string) (*graph.DependencyGraph, error)
+	ScoreCriticality(g *graph.DependencyGraph) []graph.ServiceScore
 }
 
-// StressEngine executes controlled HTTP load tests against target microservices
+// StressEngine executes controlled HTTP/gRPC load plans
 type StressEngine interface {
 	Start(ctx context.Context, plan stress.LoadPlan) error
 	Stop()
 }
 
-// Watcher periodically queries metrics store and evaluates health
+// Watcher polls Prometheus metrics in real-time
 type Watcher interface {
 	Start(ctx context.Context, experimentID string, targetService string) (<-chan watcher.MetricSnapshot, error)
 	Stop()
 }
 
-// SafetyController evaluates metric snapshots against policy bounds
+// SafetyController checks metric snapshots against SLA boundaries
 type SafetyController interface {
 	Evaluate(snapshot watcher.MetricSnapshot) safety.SafetyDecision
 }
 
-// CapacityAnalyzer calculates performance thresholds and recovery timings
+// CapacityAnalyzer computes sustainable throughput and recovery metrics
 type CapacityAnalyzer interface {
 	Analyze(observations []capacity.Observation, policy safety.SafetyPolicy) capacity.CapacityResult
 }
 
-// ReportEngine compiles reports into durable JSON and HTML deliverables
+// ReportEngine builds structured JSON and rendered HTML reports
 type ReportEngine interface {
 	Generate(
 		exp experiment.Experiment,
-		capacity capacity.CapacityResult,
+		capResult capacity.CapacityResult,
 		scores []graph.ServiceScore,
 		observations []capacity.Observation,
 	) (capacity.ExperimentReport, error)
 }
 
-// ExperimentRepository defines persistent SQL interactions for experiment lifecycle
+// ExperimentRepository persists lifecycle states, observations, and reports
 type ExperimentRepository interface {
 	Create(ctx context.Context, exp *experiment.Experiment) error
 	GetByID(ctx context.Context, id string) (*experiment.Experiment, error)
+	List(ctx context.Context) ([]experiment.Experiment, error)
 	UpdateState(ctx context.Context, id string, state experiment.ExperimentState, stopReason string) error
 	SaveObservation(ctx context.Context, expID string, obs capacity.Observation) error
 	GetObservations(ctx context.Context, expID string) ([]capacity.Observation, error)
@@ -257,144 +284,123 @@ type ExperimentRepository interface {
 	GetReport(ctx context.Context, expID string) (*capacity.ExperimentReport, error)
 }
 
-// EventProducer publishes asynchronous domain events to Kafka
+// EventProducer streams asynchronous domain events to Kafka
 type EventProducer interface {
-	Publish(ctx context.Context, event events.Event) error
+	Publish(ctx context.Context, event events.DomainEvent) error
 	Close() error
 }
 ```
 
 ---
 
-## 3. Experiment State Machine
+## 4. Experiment State Machine
 
 ```mermaid
 stateDiagram-v2
     [*] --> CREATED
-    CREATED --> PLANNED : Config Validated & Target Confirmed
-    PLANNED --> RUNNING : Load Generation & Watcher Started
+    CREATED --> PLANNED : Config Validated & Target URL Confirmed
+    PLANNED --> RUNNING : Stress & Watcher Goroutines Spawned
     
-    RUNNING --> STOPPING : Safety Breached OR Manual Stop
-    RUNNING --> ABORTED : System Failure / Engine Crash
+    RUNNING --> STOPPING : Safety Threshold Breached OR User /stop
+    RUNNING --> ABORTED : Fatal Crash / Target Network Drop
     
-    STOPPING --> ANALYZING : Load Stopped & Recovery Window Observed
-    ANALYZING --> REPORTING : Capacity Metrics Computed
-    REPORTING --> COMPLETED : Report Persisted & Published
+    STOPPING --> ANALYZING : Traffic Stopped (0 req/s) & Recovery Window Monitored
+    ANALYZING --> REPORTING : Capacity & Degradation Metrics Computed
+    REPORTING --> COMPLETED : Report Saved in DB & Published to Kafka
     
     ABORTED --> [*]
     COMPLETED --> [*]
 ```
 
-### State Transition Validation Matrix
+### State Transitions & Trigger Matrix
 
-| Current State | Target State | Trigger / Conditions |
+| State Transition | Trigger / Condition | Actions Taken |
 | :--- | :--- | :--- |
-| `CREATED` | `PLANNED` | Target service validated & load plan parameterized. |
-| `PLANNED` | `RUNNING` | Goroutines spawned for `StressEngine` and `WatcherEngine`. |
-| `RUNNING` | `STOPPING` | Safety threshold breached (`SafetyController`) OR user invoked `/stop`. |
-| `RUNNING` | `ABORTED` | `StressEngine` crash, telemetry loss, or database disconnection. |
-| `STOPPING` | `ANALYZING` | Traffic ceased (0 req/s); observing recovery baseline window. |
-| `ANALYZING` | `REPORTING` | `CapacityAnalyzer` computes sustainable rate, degradation & recovery time. |
-| `REPORTING` | `COMPLETED` | JSON/HTML report written to Postgres and published to Kafka. |
+| `CREATED` $\rightarrow$ `PLANNED` | Valid request payload & reachable target service. | Construct `LoadPlan`, validate Prometheus metric queries. |
+| `PLANNED` $\rightarrow$ `RUNNING` | Orchestrator starts execution context. | Launch worker goroutines (`StressEngine`) & Prometheus poller (`WatcherEngine`). |
+| `RUNNING` $\rightarrow$ `STOPPING` | `SafetyController` triggers breach (`ShouldStop == true`) OR `/stop` called. | Invoke `context.CancelFunc` (instant stop), enter post-stress recovery monitoring. |
+| `RUNNING` $\rightarrow$ `ABORTED` | Unrecoverable engine error or database drop. | Cancel workers, record failure reason in Postgres, publish alert to Kafka. |
+| `STOPPING` $\rightarrow$ `ANALYZING` | Recovery window expires. | Pass collected observation array to `CapacityAnalyzer`. |
+| `ANALYZING` $\rightarrow$ `REPORTING` | Capacity metrics computed. | Pass results to `ReportEngine` to assemble final deliverable. |
+| `REPORTING` $\rightarrow$ `COMPLETED` | Artifacts stored. | Write report to PostgreSQL, publish completion event to Kafka topic `experiment-events`. |
 
 ---
 
-## 4. Concurrency & Context Cancellation Model
-
-The core control path requires deterministic, real-time context cancellation.
+## 5. Concurrency & Fast-Path Context Cancellation
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant EM as ExperimentManager
-    participant Ctx as context.Context
+    participant Ctx as Go context.Context
     participant SE as StressEngine (Workers)
     participant WE as WatcherEngine
     participant SC as SafetyController
+    participant KF as Kafka Producer
 
     EM->>Ctx: context.WithCancel(parentCtx)
     EM->>SE: go SE.Start(ctx, loadPlan)
     EM->>WE: go WE.Start(ctx, expID, targetService)
     
     loop Every 1 Second
-        WE->>WE: Query Prometheus Metrics
+        WE->>WE: Query Prometheus (/api/v1/query)
         WE->>SC: Evaluate(MetricSnapshot)
-        alt Metrics Normal
+        alt Metrics within bounds
             SC-->>WE: SafetyDecision{ShouldStop: false}
         else Threshold Breached (e.g. P95 > 500ms)
             SC-->>WE: SafetyDecision{ShouldStop: true, Reason: "P95 > 500ms"}
-            WE->>EM: Trigger Cancel Callback
+            Note over WE,EM: FAST-PATH IN-MEMORY CANCELLATION
+            WE->>EM: Trigger cancel callback
             EM->>Ctx: cancel()
             Ctx-->>SE: <-ctx.Done() signaled
-            SE->>SE: Worker Goroutines Exit Immediately
+            SE->>SE: All HTTP worker goroutines abort instantly
             Ctx-->>WE: <-ctx.Done() signaled
-            WE->>WE: Stop Prometheus Poller
+            WE->>WE: Poller stops load monitoring & switches to recovery mode
+            Note over EM,KF: ASYNC NOTIFICATION (NON-BLOCKING)
+            EM->>KF: Publish "SAFETY_STOP_TRIGGERED" event to Kafka
         end
     end
 ```
 
-### Goroutine Worker Architecture inside `StressEngine`
-
-```go
-func (e *engine) Start(ctx context.Context, plan stress.LoadPlan) error {
-	ticker := time.NewTicker(time.Second / time.Duration(plan.InitialRate))
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			// Immediate shutdown on safety breach or manual stop
-			return ctx.Err()
-		case <-ticker.C:
-			// Dispatch HTTP request worker asynchronously
-			go e.sendRequest(ctx, plan.TargetURL)
-		}
-	}
-}
-```
-
 ---
 
-## 5. Graph Analysis & Criticality Scoring Engine
+## 6. Graph Analysis & Criticality Scoring Engine
 
-### Criticality Score Formula
+### 6.1 Criticality Score Formula
 
 $$S(v) = w_1 \cdot \text{InDegree}(v) + w_2 \cdot \text{OutDegree}(v) + w_3 \cdot \text{CallFreq}(v) + w_4 \cdot \text{Depth}(v) + w_5 \cdot \text{SPOF}(v)$$
 
-Where:
-- $\text{InDegree}(v)$: Count of microservices dependent on service $v$.
-- $\text{OutDegree}(v)$: Count of downstream dependencies service $v$ invokes.
-- $\text{CallFreq}(v)$: Total requests per second directed to service $v$.
-- $\text{Depth}(v)$: Maximum path distance from API Gateway.
-- $\text{SPOF}(v)$: Binary or weighted metric if removing $v$ disconnects downstream graph nodes.
-- Default weights: $w_1 = 0.35, w_2 = 0.15, w_3 = 0.25, w_4 = 0.10, w_5 = 0.15$.
+- **$\text{InDegree}(v)$**: Number of upstream services depending on $v$.
+- **$\text{OutDegree}(v)$**: Number of downstream dependencies invoked by $v$.
+- **$\text{CallFreq}(v)$**: Normalized calls per second routed to $v$.
+- **$\text{Depth}(v)$**: Distance from the ingress API gateway.
+- **$\text{SPOF}(v)$**: Binary indicator (1.0 or 0.0) indicating whether failure of $v$ partitions the service graph.
+- **Weights**: $w_1 = 0.35, w_2 = 0.15, w_3 = 0.25, w_4 = 0.10, w_5 = 0.15$.
 
-Normalized final score $S(v) \in [0.0, 1.0]$.
+Normalized final score: $S(v) \in [0.0, 1.0]$.
 
 ---
 
-## 6. Safety Controller & Health Evaluation
-
-### Deterministic Threshold Logic
+## 7. Safety Controller & Health Evaluation
 
 ```go
 func (c *SafetyController) Evaluate(snapshot watcher.MetricSnapshot) safety.SafetyDecision {
 	if snapshot.P95LatencyMs > c.policy.MaxP95LatencyMs {
 		return safety.SafetyDecision{
 			ShouldStop: true,
-			Reason:     fmt.Sprintf("P95 latency breached limit: %.2f ms > %.2f ms", snapshot.P95LatencyMs, c.policy.MaxP95LatencyMs),
+			Reason:     fmt.Sprintf("P95 latency breached SLA: %.2f ms > %.2f ms", snapshot.P95LatencyMs, c.policy.MaxP95LatencyMs),
 		}
 	}
 	if snapshot.ErrorRate > c.policy.MaxErrorRate {
 		return safety.SafetyDecision{
 			ShouldStop: true,
-			Reason:     fmt.Sprintf("Error rate breached limit: %.2f%% > %.2f%%", snapshot.ErrorRate*100, c.policy.MaxErrorRate*100),
+			Reason:     fmt.Sprintf("Error rate breached SLA: %.2f%% > %.2f%%", snapshot.ErrorRate*100, c.policy.MaxErrorRate*100),
 		}
 	}
 	if snapshot.Availability < c.policy.MinAvailability {
 		return safety.SafetyDecision{
 			ShouldStop: true,
-			Reason:     fmt.Sprintf("Availability breached limit: %.2f%% < %.2f%%", snapshot.Availability*100, c.policy.MinAvailability*100),
+			Reason:     fmt.Sprintf("Availability breached SLA: %.2f%% < %.2f%%", snapshot.Availability*100, c.policy.MinAvailability*100),
 		}
 	}
 	return safety.SafetyDecision{ShouldStop: false}
@@ -403,35 +409,32 @@ func (c *SafetyController) Evaluate(snapshot watcher.MetricSnapshot) safety.Safe
 
 ---
 
-## 7. Kafka Event Backbone & Messaging Schema
+## 8. Kafka Event Backbone & Messaging Schema
 
-Kafka Topic: `experiment-events`
-
-### Envelope Schema
+**Topic**: `experiment-events`
 
 ```json
 {
-  "id": "evt_987654321",
-  "experiment_id": "exp_123456789",
-  "type": "THRESHOLD_BREACHED",
-  "timestamp": "2026-08-14T18:30:00Z",
-  "service": "order-service",
+  "event_id": "evt_01J8R9XQ7A",
+  "experiment_id": "exp_01J8R9W4N2",
+  "event_type": "SAFETY_STOP_TRIGGERED",
+  "timestamp": "2026-08-20T07:30:00Z",
+  "service": "checkoutservice",
   "payload": {
-    "breached_metric": "P95LatencyMs",
-    "observed_value": 542.5,
+    "breached_metric": "p95_latency_ms",
+    "observed_value": 620.5,
     "threshold_value": 500.0,
-    "reason": "P95 latency breached limit: 542.50 ms > 500.00 ms"
+    "reason": "P95 latency breached SLA: 620.50 ms > 500.00 ms",
+    "action": "CONTEXT_CANCELLED"
   }
 }
 ```
 
 ---
 
-## 8. PostgreSQL Storage Schema (DDL)
+## 9. PostgreSQL Storage Schema (DDL)
 
 ```sql
--- PostgreSQL DDL for DAMASCUS Control Plane
-
 CREATE TABLE IF NOT EXISTS services (
     id VARCHAR(64) PRIMARY KEY,
     name VARCHAR(128) NOT NULL UNIQUE,
@@ -448,7 +451,8 @@ CREATE TABLE IF NOT EXISTS dependencies (
 
 CREATE TABLE IF NOT EXISTS experiments (
     id VARCHAR(64) PRIMARY KEY,
-    target_service VARCHAR(128) NOT NULL REFERENCES services(name),
+    target_service VARCHAR(128) NOT NULL,
+    target_url VARCHAR(512) NOT NULL,
     test_type VARCHAR(32) NOT NULL,
     status VARCHAR(32) NOT NULL,
     initial_rate INT NOT NULL,
@@ -485,16 +489,10 @@ CREATE TABLE IF NOT EXISTS observations (
     memory_utilization DOUBLE PRECISION NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS safety_events (
-    id SERIAL PRIMARY KEY,
-    experiment_id VARCHAR(64) NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
-    event_type VARCHAR(64) NOT NULL,
-    reason TEXT NOT NULL,
-    timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE TABLE IF NOT EXISTS reports (
     experiment_id VARCHAR(64) PRIMARY KEY REFERENCES experiments(id) ON DELETE CASCADE,
+    target_service VARCHAR(128) NOT NULL,
+    criticality_score DOUBLE PRECISION NOT NULL,
     maximum_tested_rate INT NOT NULL,
     maximum_sustainable_rate INT NOT NULL,
     degradation_rate INT NOT NULL,
@@ -507,14 +505,16 @@ CREATE TABLE IF NOT EXISTS reports (
 
 ---
 
-## 9. REST API Specification
+## 10. REST API Specification
 
-| HTTP Method | Path | Description | Request Body | Response Body |
+| Method | Endpoint | Description | Request Body | Response Body |
 | :--- | :--- | :--- | :--- | :--- |
-| `POST` | `/api/experiments` | Create a new experiment draft | `CreateExperimentDTO` | `Experiment` object |
-| `POST` | `/api/experiments/{id}/start` | Trigger execution of experiment | None | `{"status": "RUNNING"}` |
-| `POST` | `/api/experiments/{id}/stop` | Manually abort running experiment | `{"reason": "string"}` | `{"status": "STOPPING"}` |
-| `GET` | `/api/experiments/{id}` | Retrieve experiment details | None | `Experiment` object |
-| `GET` | `/api/experiments/{id}/status` | Get live metrics & state | None | Live metrics DTO |
-| `GET` | `/api/dependencies` | Fetch dependency graph & scores | None | Graph & `[]ServiceScore` |
-| `GET` | `/api/experiments/{id}/report` | Retrieve completed report | None | `ExperimentReport` JSON |
+| `GET` | `/api/health` | Verify DAMASCUS & observability status | None | `{"status": "UP", "jaeger": "CONNECTED", "prometheus": "CONNECTED"}` |
+| `GET` | `/api/dependencies` | Fetch trace dependency graph & criticality scores | None | `{"graph": {...}, "scores": [...]}` |
+| `POST` | `/api/experiments` | Create a new experiment configuration | `CreateExperimentDTO` | `Experiment` object |
+| `POST` | `/api/experiments/{id}/start` | Trigger execution of planned experiment | None | `{"status": "RUNNING"}` |
+| `POST` | `/api/experiments/{id}/stop` | Manual emergency stop | `{"reason": "string"}` | `{"status": "STOPPING"}` |
+| `GET` | `/api/experiments` | List all historical experiments | None | `[]Experiment` |
+| `GET` | `/api/experiments/{id}` | Retrieve experiment metadata | None | `Experiment` object |
+| `GET` | `/api/experiments/{id}/status` | Get live metrics stream snapshot | None | `MetricSnapshot` object |
+| `GET` | `/api/experiments/{id}/report` | Retrieve completed experiment report | None | `ExperimentReport` JSON |
