@@ -44,7 +44,7 @@ DAMASCUS targets standard OpenTelemetry-instrumented environments. You can launc
 
 ```bash
 # Start target microservices, OTel Collector, Jaeger, and Prometheus
-docker compose -f deployments/docker-compose.otel-demo.yml up -d
+docker compose -f deployments/docker-compose.otel-demo.yaml up -d
 ```
 
 ### 🌐 Live Service & Observability Endpoints
@@ -54,11 +54,11 @@ docker compose -f deployments/docker-compose.otel-demo.yml up -d
 | 🔭 **Astronomy Web Shop** | [**`http://localhost:8080/`**](http://localhost:8080/) | Target e-commerce store with live product catalog and checkout flows. |
 | 🔍 **Jaeger Traces UI & API** | [**`http://localhost:16686/`**](http://localhost:16686/) | Distributed trace trees and REST API (`/api/traces`, `/api/dependencies`). |
 | 📈 **Prometheus Metrics** | [**`http://localhost:9090/`**](http://localhost:9090/) | Time-series metrics engine and PromQL API (`/api/v1/query`). |
-| 📊 **Grafana Dashboards** | [**`http://localhost:8080/grafana/`**](http://localhost:8080/grafana/) | Pre-configured metrics, latency distributions, and trace visualization. |
 
 To stop the target environment:
+
 ```bash
-docker compose -f deployments/docker-compose.otel-demo.yml down
+docker compose -f deployments/docker-compose.otel-demo.yaml down
 ```
 
 ---
@@ -97,7 +97,7 @@ damascus/
 ├── README.md                           # Project summary, quick start & architecture links
 ├── go.mod / go.sum                     # Go module definitions
 ├── deployments/                        # Target environment & infrastructure bundles
-│   ├── docker-compose.otel-demo.yml    # Standalone OpenTelemetry Demo stack
+│   ├── docker-compose.otel-demo.yaml   # Standalone OpenTelemetry Demo stack
 │   ├── otel-collector-config.yaml      # OTel Collector trace & metric pipelines
 │   └── prometheus.yaml                 # 1s sub-second scraping configuration
 └── docs/                               # System specifications & roadmap

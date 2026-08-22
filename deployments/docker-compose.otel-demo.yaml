@@ -1,163 +1,171 @@
 services:
-      jaeger:
-        image: jaegertracing/all-in-one:latest
-        container_name: damascus-jaeger
-        ports:
-          - "16686:16686" # Web UI and REST API
-          - "4317"        # OTLP gRPC receiver
+  # -------------------------------------------------------------
+  # 1. Observability Backends
+  # -------------------------------------------------------------
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: damascus-jaeger
+    ports:
+      - "16686:16686" # Web UI and REST API
+      - "4317"        # OTLP gRPC receiver
 
-      prometheus:
-        image: prom/prometheus:latest
-        container_name: damascus-prometheus
-        volumes:
-          - ./prometheus.yaml:/etc/prometheus/prometheus.yml
-        ports:
-          - "9090:9090"   # Prometheus Web UI & PromQL API
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: damascus-prometheus
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"   # Prometheus Web UI & PromQL API
 
-      otel-collector:
-        image: otel/opentelemetry-collector-contrib:0.111.0
-        container_name: damascus-otel-collector
-        command: ["--config=/etc/otelcol-contrib/config.yaml"]
-        volumes:
-          - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml
-        ports:
-          - "4317:4317"   # OTLP gRPC
-          - "4318:4318"   # OTLP HTTP
-          - "8889:8889"   # Prometheus metrics exporter
-        depends_on:
-          - jaeger
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    container_name: damascus-otel-collector
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "8889:8889"   # Prometheus metrics exporter
+    depends_on:
+      - jaeger
 
+  # -------------------------------------------------------------
+  # 2. Astronomy Shop Microservices
+  # -------------------------------------------------------------
+  frontend:
+    image: ghcr.io/open-telemetry/demo:1.11.0-frontend
+    container_name: damascus-frontend
+    environment:
+      - PORT=8080
+      - FRONTEND_PORT=8080
+      - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
+      - CURRENCY_SERVICE_ADDR=currencyservice:7000
+      - CART_SERVICE_ADDR=cartservice:7070
+      - RECOMMENDATION_SERVICE_ADDR=recommendationservice:8080
+      - SHIPPING_SERVICE_ADDR=shippingservice:50051
+      - CHECKOUT_SERVICE_ADDR=checkoutservice:5050
+      - AD_SERVICE_ADDR=adservice:9555
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=frontend
+    ports:
+      - "8080:8080"
+    depends_on:
+      - otel-collector
 
-      frontend:
-        image: ghcr.io/open-telemetry/demo:1.11.0-frontend
-        container_name: damascus-frontend
-        environment:
-          - PORT=8080
-          - FRONTEND_PORT=8080
-          - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
-          - CURRENCY_SERVICE_ADDR=currencyservice:7000
-          - CART_SERVICE_ADDR=cartservice:7070
-          - RECOMMENDATION_SERVICE_ADDR=recommendationservice:8080
-          - SHIPPING_SERVICE_ADDR=shippingservice:50051
-          - CHECKOUT_SERVICE_ADDR=checkoutservice:5050
-          - AD_SERVICE_ADDR=adservice:9555
-          - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-          - OTEL_SERVICE_NAME=frontend
-        ports:
-          - "8080:8080"
-        depends_on:
-          - otel-collector
+  cartservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-cartservice
+    container_name: damascus-cartservice
+    environment:
+      - CART_SERVICE_PORT=7070
+      - VALKEY_ADDR=valkey-cart:6379
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=cartservice
+    depends_on:
+      - otel-collector
+      - valkey-cart
 
-      cartservice:
-        image: ghcr.io/open-telemetry/demo:1.11.0-cartservice
-        container_name: damascus-cartservice
-        environment:
-          - CART_SERVICE_PORT=7070
-          - REDIS_ADDR=valkey-cart:6379
-          - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-          - OTEL_SERVICE_NAME=cartservice
-        depends_on:
-          - otel-collector
-          - valkey-cart
+  valkey-cart:
+    image: valkey/valkey:8-alpine
+    container_name: damascus-valkey-cart
 
-      valkey-cart:
-        image: valkey/valkey:8-alpine
-        container_name: damascus-valkey-cart
+  productcatalogservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-productcatalogservice
+    container_name: damascus-productcatalogservice
+    environment:
+      - PORT=3550
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=productcatalogservice
+    depends_on:
+      - otel-collector
 
-      productcatalogservice:
-        image: ghcr.io/open-telemetry/demo:1.11.0-productcatalogservice
-        container_name: damascus-productcatalogservice
-        environment:
-          - PORT=3550
-          - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-          - OTEL_SERVICE_NAME=productcatalogservice
-        depends_on:
-          - otel-collector
+  currencyservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-currencyservice
+    container_name: damascus-currencyservice
+    environment:
+      - PORT=7000
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=currencyservice
+    depends_on:
+      - otel-collector
 
-      currencyservice:
-        image: ghcr.io/open-telemetry/demo:1.11.0-currencyservice
-        container_name: damascus-currencyservice
-        environment:
-          - PORT=7000
-          - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-          - OTEL_SERVICE_NAME=currencyservice
-        depends_on:
-          - otel-collector
+  paymentservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-paymentservice
+    container_name: damascus-paymentservice
+    environment:
+      - PORT=50051
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=paymentservice
+    depends_on:
+      - otel-collector
 
-      paymentservice:
-        image: ghcr.io/open-telemetry/demo:1.11.0-paymentservice
-        container_name: damascus-paymentservice
-        environment:
-          - PORT=50051
-          - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-          - OTEL_SERVICE_NAME=paymentservice
-        depends_on:
-          - otel-collector
+  shippingservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-shippingservice
+    container_name: damascus-shippingservice
+    environment:
+      - PORT=50051
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=shippingservice
+    depends_on:
+      - otel-collector
 
-      shippingservice:
-        image: ghcr.io/open-telemetry/demo:1.11.0-shippingservice
-        container_name: damascus-shippingservice
-        environment:
-          - PORT=50051
-          - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-          - OTEL_SERVICE_NAME=shippingservice
-        depends_on:
-          - otel-collector
+  emailservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-emailservice
+    container_name: damascus-emailservice
+    environment:
+      - PORT=8080
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=emailservice
+    depends_on:
+      - otel-collector
 
-      emailservice:
-        image: ghcr.io/open-telemetry/demo:1.11.0-emailservice
-        container_name: damascus-emailservice
-        environment:
-          - PORT=8080
-          - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-          - OTEL_SERVICE_NAME=emailservice
-        depends_on:
-          - otel-collector
+  checkoutservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-checkoutservice
+    container_name: damascus-checkoutservice
+    environment:
+      - PORT=5050
+      - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
+      - SHIPPING_SERVICE_ADDR=shippingservice:50051
+      - PAYMENT_SERVICE_ADDR=paymentservice:50051
+      - EMAIL_SERVICE_ADDR=emailservice:8080
+      - CURRENCY_SERVICE_ADDR=currencyservice:7000
+      - CART_SERVICE_ADDR=cartservice:7070
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=checkoutservice
+    depends_on:
+      - otel-collector
 
-      checkoutservice:
-        image: ghcr.io/open-telemetry/demo:1.11.0-checkoutservice
-        container_name: damascus-checkoutservice
-        environment:
-          - PORT=5050
-          - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
-          - SHIPPING_SERVICE_ADDR=shippingservice:50051
-          - PAYMENT_SERVICE_ADDR=paymentservice:50051
-          - EMAIL_SERVICE_ADDR=emailservice:8080
-          - CURRENCY_SERVICE_ADDR=currencyservice:7000
-          - CART_SERVICE_ADDR=cartservice:7070
-          - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-          - OTEL_SERVICE_NAME=checkoutservice
-        depends_on:
-          - otel-collector
+  recommendationservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-recommendationservice
+    container_name: damascus-recommendationservice
+    environment:
+      - RECOMMENDATION_SERVICE_PORT=8080
+      - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=recommendationservice
+    depends_on:
+      - otel-collector
 
-      recommendationservice:
-        image: ghcr.io/open-telemetry/demo:1.11.0-recommendationservice
-        container_name: damascus-recommendationservice
-        environment:
-          - PORT=8080
-          - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
-          - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-          - OTEL_SERVICE_NAME=recommendationservice
-        depends_on:
-          - otel-collector
+  adservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-adservice
+    container_name: damascus-adservice
+    environment:
+      - PORT=9555
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=adservice
+    depends_on:
+      - otel-collector
 
-      adservice:
-        image: ghcr.io/open-telemetry/demo:1.11.0-adservice
-        container_name: damascus-adservice
-        environment:
-          - PORT=9555
-          - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-          - OTEL_SERVICE_NAME=adservice
-        depends_on:
-          - otel-collector
-
-      loadgenerator:
-        image: ghcr.io/open-telemetry/demo:1.11.0-loadgenerator
-        container_name: damascus-loadgenerator
-        environment:
-          - FRONTEND_ADDR=frontend:8080
-          - USERS=5
-          - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-          - OTEL_SERVICE_NAME=loadgenerator
-        depends_on:
-          - frontend
+  # -------------------------------------------------------------
+  # 3. Load Generator (Simulates user traffic in background)
+  # -------------------------------------------------------------
+  loadgenerator:
+    image: ghcr.io/open-telemetry/demo:1.11.0-loadgenerator
+    container_name: damascus-loadgenerator
+    environment:
+      - FRONTEND_ADDR=frontend:8080
+      - USERS=5
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=loadgenerator
+    depends_on:
+      - frontend
