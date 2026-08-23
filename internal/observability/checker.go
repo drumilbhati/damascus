@@ -35,24 +35,29 @@ func (c *Checker) CheckObservabilityStack(ctx context.Context, cfg config.Enviro
 		Errors:     make(map[string]string),
 	}
 
-	if err := c.probeEndpoint(ctx, cfg.TargetBaseURL, true); err != nil {
-		status.Status = "DOWN"
+	// 1. Probe Target Base URL (accepts 2xx/3xx/4xx, rejects >= 500)
+	if err := c.probeEndpoint(ctx, cfg.TargetBaseURL, false); err != nil {
 		status.Target = "UNREACHABLE"
 		status.Errors["target"] = err.Error()
 	}
 
-	jaegerURL := strings.TrimRight(cfg.JaegerTraceBaseURL, "/") + "/api/traces"
-	if err := c.probeEndpoint(ctx, jaegerURL, false); err != nil {
-		status.Status = "DOWN"
+	// 2. Probe Jaeger Services API (strictly requires 200 OK)
+	jaegerURL := strings.TrimRight(cfg.JaegerTraceBaseURL, "/") + "/api/services"
+	if err := c.probeEndpoint(ctx, jaegerURL, true); err != nil {
 		status.Jaeger = "UNREACHABLE"
 		status.Errors["jaeger"] = err.Error()
 	}
 
+	// 3. Probe Prometheus PromQL API (strictly requires 200 OK and status: "success")
 	prometheusURL := strings.TrimRight(cfg.PrometheusBaseURL, "/") + "/api/v1/query?query=up"
 	if err := c.probePrometheus(ctx, prometheusURL); err != nil {
-		status.Status = "DOWN"
 		status.Prometheus = "UNREACHABLE"
 		status.Errors["prometheus"] = err.Error()
+	}
+
+	if len(status.Errors) > 0 {
+		status.Status = "DOWN"
+		return status, fmt.Errorf("observability stack health check failed: %d errors encountered", len(status.Errors))
 	}
 
 	return status, nil
@@ -69,7 +74,7 @@ func (c *Checker) probeEndpoint(ctx context.Context, url string, requireOK bool)
 		return fmt.Errorf("failed to reach %s: %w", url, err)
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body) // Discard the response body
+	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if requireOK && resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status code %d from %s", resp.StatusCode, url)
@@ -91,7 +96,7 @@ func (c *Checker) probePrometheus(ctx context.Context, url string) error {
 		return fmt.Errorf("failed to reach %s: %w", url, err)
 	}
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status code %d from %s", resp.StatusCode, url)
 	}
