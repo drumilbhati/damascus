@@ -3,6 +3,7 @@
 > **Cloud Computing Course Project & Autonomous Resilience Engineering Platform**
 
 **DAMASCUS is an autonomous chaos-testing and capacity-profiling control platform for distributed microservices. By connecting to standard cloud observability backends (Jaeger and Prometheus), DAMASCUS automatically discovers service dependencies, calculates structural criticality scores, executes controlled stress experiments, enforces real-time closed-loop safety stops, and profiles sustainable capacity boundaries.**
+
 ---
 
 ## 💡 System Mental Model
