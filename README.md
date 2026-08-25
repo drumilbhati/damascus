@@ -8,6 +8,8 @@
 
 ## 💡 System Mental Model
 
+
+
 ```text
  ┌────────────────────────────────────────────────────────────────────────┐
  │            Target Microservice Mesh (e.g. OpenTelemetry Demo)          │
