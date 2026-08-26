@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"testing"
 	"time"
 
@@ -12,6 +13,13 @@ import (
 )
 
 func TestCheckObservabilityStack_LiveIntegration(t *testing.T) {
+	// Check if live target is reachable; skip gracefully if offline in CI / non-docker environment
+	conn, err := net.DialTimeout("tcp", "localhost:8080", 500*time.Millisecond)
+	if err != nil {
+		t.Skip("Skipping live integration test: localhost:8080 is not reachable (Docker stack offline)")
+	}
+	_ = conn.Close()
+
 	checker := observability.NewChecker(5 * time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
