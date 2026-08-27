@@ -42,7 +42,7 @@ func TestExperimentReport_JSONSerialization(t *testing.T) {
 		MaximumSustainableRate: 750,
 		DegradationRate:        600,
 		SafetyBoundaryRate:     800,
-		RecoveryTime:           4 * time.Second,
+		RecoveryTimeSec:        4,
 		Observations: []capacity.Observation{
 			{
 				Timestamp:         now,
@@ -80,7 +80,7 @@ func TestExperimentReport_JSONSerialization(t *testing.T) {
 	if decoded.Observations[0].LoadRate != 500.0 {
 		t.Errorf("expected observation LoadRate 500.0, got %f", decoded.Observations[0].LoadRate)
 	}
-	if decoded.RecoveryTime != report.RecoveryTime {
-		t.Errorf("expected RecoveryTime %v, got %v", report.RecoveryTime, decoded.RecoveryTime)
+	if decoded.RecoveryTimeSec != report.RecoveryTimeSec {
+		t.Errorf("expected RecoveryTimeSec %d, got %d", report.RecoveryTimeSec, decoded.RecoveryTimeSec)
 	}
 }

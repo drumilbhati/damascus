@@ -31,7 +31,7 @@ type ExperimentReport struct {
 	MaximumSustainableRate int           `json:"maximum_sustainable_rate"`
 	DegradationRate        int           `json:"degradation_rate"`
 	SafetyBoundaryRate     int           `json:"safety_boundary_rate"`
-	RecoveryTime           time.Duration `json:"recovery_time"`
+	RecoveryTimeSec        int           `json:"recovery_time_sec"`
 	Observations           []Observation `json:"observations"`
 	Recommendations        []string      `json:"recommendations"`
 	GeneratedAt            time.Time     `json:"generated_at"`
