@@ -8,6 +8,30 @@ import (
 	"damascus/internal/capacity"
 )
 
+func TestCapacityResult_JSONSerialization(t *testing.T) {
+	result := capacity.CapacityResult{
+		MaximumTestedRate:      1000,
+		MaximumSustainableRate: 750,
+		DegradationRate:        600,
+		SafetyBoundaryRate:     800,
+		RecoveryTimeSec:        4,
+	}
+
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("failed to marshal CapacityResult: %v", err)
+	}
+
+	var decoded capacity.CapacityResult
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("failed to unmarshal CapacityResult: %v", err)
+	}
+
+	if decoded.RecoveryTimeSec != result.RecoveryTimeSec {
+		t.Errorf("expected RecoveryTimeSec %d, got %d", result.RecoveryTimeSec, decoded.RecoveryTimeSec)
+	}
+}
+
 func TestExperimentReport_JSONSerialization(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	report := capacity.ExperimentReport{
@@ -22,7 +46,7 @@ func TestExperimentReport_JSONSerialization(t *testing.T) {
 		Observations: []capacity.Observation{
 			{
 				Timestamp:         now,
-				LoadRate:          500,
+				LoadRate:          500.0,
 				P95LatencyMs:      85.0,
 				ErrorRate:         0.0,
 				Availability:      1.0,
@@ -52,6 +76,9 @@ func TestExperimentReport_JSONSerialization(t *testing.T) {
 	}
 	if len(decoded.Observations) != 1 {
 		t.Errorf("expected 1 observation, got %d", len(decoded.Observations))
+	}
+	if decoded.Observations[0].LoadRate != 500.0 {
+		t.Errorf("expected observation LoadRate 500.0, got %f", decoded.Observations[0].LoadRate)
 	}
 	if decoded.RecoveryTime != report.RecoveryTime {
 		t.Errorf("expected RecoveryTime %v, got %v", report.RecoveryTime, decoded.RecoveryTime)
