@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -25,9 +26,18 @@ func main() {
 	fmt.Println()
 
 	runGraphDemo()
-	runObservabilityCheckerDemo()
+
+	if err := runObservabilityCheckerDemo(); err != nil {
+		fmt.Printf("\n❌ Demo failed at Observability Health Checker: %v\n", err)
+		os.Exit(1)
+	}
+
 	runStressEngineSteppedDemo()
-	runClosedLoopSafetyStopDemo()
+
+	if err := runClosedLoopSafetyStopDemo(); err != nil {
+		fmt.Printf("\n❌ Demo failed at Closed-Loop Safety Stop: %v\n", err)
+		os.Exit(1)
+	}
 
 	fmt.Println("\n==================================================================")
 	fmt.Println("                   All Demo Scenarios Passed!                     ")
@@ -60,7 +70,7 @@ func runGraphDemo() {
 // -----------------------------------------------------------------------------
 // 2. Observability Stack Health Checker
 // -----------------------------------------------------------------------------
-func runObservabilityCheckerDemo() {
+func runObservabilityCheckerDemo() error {
 	fmt.Println("🔹 [Demo 2/4] Observability Stack Health Checker")
 	fmt.Println("------------------------------------------------------------------")
 
@@ -98,10 +108,15 @@ func runObservabilityCheckerDemo() {
 	status, err := checker.CheckObservabilityStack(ctx, cfg)
 	if err != nil {
 		fmt.Printf("Health check error: %v\n", err)
+		return err
+	}
+	if status.Status != "UP" {
+		return fmt.Errorf("observability stack status is %s", status.Status)
 	}
 
 	statusJSON, _ := json.MarshalIndent(status, "  ", "  ")
 	fmt.Printf("  Health Check Result:\n  %s\n\n", string(statusJSON))
+	return nil
 }
 
 // -----------------------------------------------------------------------------
@@ -151,7 +166,7 @@ func runStressEngineSteppedDemo() {
 // -----------------------------------------------------------------------------
 // 4. Closed-Loop Real-Time Safety Fast-Path Abort
 // -----------------------------------------------------------------------------
-func runClosedLoopSafetyStopDemo() {
+func runClosedLoopSafetyStopDemo() error {
 	fmt.Println("🔹 [Demo 4/4] Closed-Loop Real-Time Safety Fast-Path Abort")
 	fmt.Println("------------------------------------------------------------------")
 
@@ -221,13 +236,13 @@ func runClosedLoopSafetyStopDemo() {
 	// Start Watcher
 	snapshotChan, err := watcherEngine.Start(execCtx, "exp-safety-demo", "checkout")
 	if err != nil {
-		fmt.Printf("Failed to start watcher: %v\n", err)
-		return
+		return fmt.Errorf("failed to start watcher: %w", err)
 	}
 
-	// Start Stress Engine in background
+	// Start Stress Engine in background with completion synchronization
+	engineDone := make(chan error, 1)
 	go func() {
-		_ = engine.Start(execCtx, plan)
+		engineDone <- engine.Start(execCtx, plan)
 	}()
 
 	fmt.Println("  Stress engine injecting load against target service...")
@@ -252,9 +267,16 @@ func runClosedLoopSafetyStopDemo() {
 		}
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	// Wait for StressEngine to cleanly finish teardown upon cancellation (deterministic sync)
+	select {
+	case <-engineDone:
+	case <-time.After(2 * time.Second):
+		return fmt.Errorf("stress engine failed to abort within 2s after context cancellation")
+	}
+
 	finalStats := engine.GetStats()
 	fmt.Printf("  Post-Abort Verification:\n")
 	fmt.Printf("    • Worker traffic successfully ceased.\n")
 	fmt.Printf("    • Total requests before emergency stop: %d\n", finalStats.TotalRequests)
+	return nil
 }

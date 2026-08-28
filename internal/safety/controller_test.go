@@ -1,6 +1,8 @@
 package safety_test
 
 import (
+	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,13 +71,16 @@ func TestSafetyController_ErrorRateBreached(t *testing.T) {
 	snapshot := watcher.MetricSnapshot{
 		Timestamp:    time.Now(),
 		P95LatencyMs: 150.0,
-		ErrorRate:    0.08, // 8% error rate
-		Availability: 0.92,
+		ErrorRate:    0.08, // 8% error rate (breach)
+		Availability: 0.99, // 99% availability (well above 95% threshold)
 	}
 
 	decision := controller.Evaluate(snapshot)
 	if !decision.ShouldStop {
 		t.Error("expected ShouldStop to be true for error rate breach, got false")
+	}
+	if !strings.Contains(decision.Reason, "Error rate breached") {
+		t.Errorf("expected reason to mention Error rate breach, got: %s", decision.Reason)
 	}
 }
 
@@ -94,5 +99,51 @@ func TestSafetyController_AvailabilityBreached(t *testing.T) {
 	decision := controller.Evaluate(snapshot)
 	if !decision.ShouldStop {
 		t.Error("expected ShouldStop to be true for availability breach, got false")
+	}
+}
+
+func TestSafetyController_NonFiniteMetrics(t *testing.T) {
+	policy := safety.SafetyPolicy{
+		MaxP95LatencyMs: 200.0,
+		MaxErrorRate:    0.05,
+		MinAvailability: 0.95,
+	}
+
+	controller := safety.NewSafetyController(policy)
+
+	// Test NaN in Latency
+	nanLatencySnap := watcher.MetricSnapshot{
+		Timestamp:    time.Now(),
+		P95LatencyMs: math.NaN(),
+		ErrorRate:    0.01,
+		Availability: 0.99,
+	}
+	decision := controller.Evaluate(nanLatencySnap)
+	if !decision.ShouldStop {
+		t.Error("expected ShouldStop to be true for NaN latency, got false")
+	}
+
+	// Test Inf in ErrorRate
+	infErrorSnap := watcher.MetricSnapshot{
+		Timestamp:    time.Now(),
+		P95LatencyMs: 100.0,
+		ErrorRate:    math.Inf(1),
+		Availability: 0.99,
+	}
+	decision = controller.Evaluate(infErrorSnap)
+	if !decision.ShouldStop {
+		t.Error("expected ShouldStop to be true for Inf error rate, got false")
+	}
+
+	// Test NaN in Availability
+	nanAvailSnap := watcher.MetricSnapshot{
+		Timestamp:    time.Now(),
+		P95LatencyMs: 100.0,
+		ErrorRate:    0.01,
+		Availability: math.NaN(),
+	}
+	decision = controller.Evaluate(nanAvailSnap)
+	if !decision.ShouldStop {
+		t.Error("expected ShouldStop to be true for NaN availability, got false")
 	}
 }

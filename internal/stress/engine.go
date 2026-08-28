@@ -151,9 +151,10 @@ func (e *HTTPStressEngine) Start(ctx context.Context, plan LoadPlan) error {
 		case <-stepTicker.C:
 			// Step rate progression
 			if currentRate < plan.MaxRate {
-				currentRate += plan.StepRate
-				if currentRate > plan.MaxRate {
+				if plan.StepRate > plan.MaxRate-currentRate {
 					currentRate = plan.MaxRate
+				} else {
+					currentRate += plan.StepRate
 				}
 				tokensPerTick = float64(currentRate) / float64(tickFrequency)
 			}
@@ -226,6 +227,10 @@ func (e *HTTPStressEngine) executeRequest(ctx context.Context, plan LoadPlan) {
 	atomic.AddInt64(&e.totalRequests, 1)
 
 	if err != nil {
+		if ctx.Err() != nil {
+			// Request was terminated due to context cancellation or shutdown
+			return
+		}
 		atomic.AddInt64(&e.errorCount, 1)
 		return
 	}

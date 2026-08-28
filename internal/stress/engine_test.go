@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,7 +53,10 @@ func TestHTTPStressEngine_SteppedLoad(t *testing.T) {
 }
 
 func TestHTTPStressEngine_FastPathContextCancellation(t *testing.T) {
+	ready := make(chan struct{})
+	var once sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(ready) })
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -74,8 +78,13 @@ func TestHTTPStressEngine_FastPathContextCancellation(t *testing.T) {
 		errCh <- engine.Start(ctx, plan)
 	}()
 
-	// Allow engine to start briefly, then trigger emergency cancel
-	time.Sleep(100 * time.Millisecond)
+	// Wait for engine to actively start and make its first request
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for engine to start making requests")
+	}
+
 	startTime := time.Now()
 	cancel() // Fast-path in-memory cancellation
 
@@ -94,7 +103,10 @@ func TestHTTPStressEngine_FastPathContextCancellation(t *testing.T) {
 }
 
 func TestHTTPStressEngine_StopMethod(t *testing.T) {
+	ready := make(chan struct{})
+	var once sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(ready) })
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -114,7 +126,12 @@ func TestHTTPStressEngine_StopMethod(t *testing.T) {
 		errCh <- engine.Start(context.Background(), plan)
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for engine to start making requests")
+	}
+
 	engine.Stop()
 
 	select {
@@ -142,7 +159,10 @@ func TestHTTPStressEngine_InvalidLoadPlan(t *testing.T) {
 }
 
 func TestHTTPStressEngine_AlreadyRunningRejection(t *testing.T) {
+	ready := make(chan struct{})
+	var once sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		once.Do(func() { close(ready) })
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -164,7 +184,11 @@ func TestHTTPStressEngine_AlreadyRunningRejection(t *testing.T) {
 		_ = engine.Start(ctx, plan)
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for engine to start making requests")
+	}
 
 	// Attempt concurrent execution on the same engine instance
 	err := engine.Start(ctx, plan)

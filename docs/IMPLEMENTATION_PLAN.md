@@ -14,19 +14,19 @@ DAMASCUS is divided into **12 structured development phases**. By targeting stan
 gantt
     title DAMASCUS Implementation Roadmap
     dateFormat  YYYY-MM-DD
-    section Phase 1 - Foundations & Ingestion
+    section Phase 1 & 2 - Foundations & Ingestion
     Target Environment & Observability Setup :done, p1, 2026-08-20, 2d
-    Go Project Domain & Interfaces           :done, p2, after p1, 1d
-    section Phase 2 - Control & Analysis Engines
+    Go Project Domain & Interfaces           :active, p2, after p1, 1d
+    section Phase 3, 4, 5 & 6 - Control & Analysis Engines
     StressEngine & HTTP Worker Pools         :done, p3, after p2, 2d
     WatcherEngine & Prometheus Poller        :done, p4, after p3, 2d
     SafetyController & Fast-Path Cancel      :done, p5, after p4, 1d
-    GraphAnalyser & Criticality Scoring      :active, p6, after p5, 2d
-    section Phase 3 - Orchestration & Storage
+    GraphAnalyser & Criticality Scoring      :p6, after p5, 2d
+    section Phase 7, 8 & 9 - Orchestration & Storage
     ExperimentManager 8-State Machine        :p7, after p6, 2d
     Kafka Event Backbone                     :p8, after p7, 2d
     PostgreSQL Repository & DDL              :p9, after p8, 2d
-    section Phase 4 - Reporting & Delivery
+    section Phase 10, 11 & 12 - Reporting & Delivery
     CapacityAnalyzer & ReportEngine          :p10, after p9, 2d
     REST API & React Dashboard               :p11, after p10, 3d
     Docker Compose, K8s & E2E Verification   :p12, after p11, 2d

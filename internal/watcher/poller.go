@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -94,7 +95,11 @@ func (w *PrometheusWatcher) Start(ctx context.Context, experimentID string, targ
 				return
 
 			case <-ticker.C:
-				snapshot := w.scrapeMetrics(pollCtx, experimentID, targetService)
+				snapshot, err := w.scrapeMetrics(pollCtx, experimentID, targetService)
+				if err != nil {
+					// Fail closed: skip publishing malformed or failed telemetry query snapshots
+					continue
+				}
 				select {
 				case snapshotChan <- snapshot:
 				case <-pollCtx.Done():
@@ -116,63 +121,72 @@ func (w *PrometheusWatcher) Stop() {
 	}
 }
 
-// scrapeMetrics executes the necessary PromQL queries to build a single MetricSnapshot.
-func (w *PrometheusWatcher) scrapeMetrics(ctx context.Context, experimentID string, targetService string) MetricSnapshot {
+// scrapeMetrics executes the necessary PromQL queries to build a single validated MetricSnapshot.
+func (w *PrometheusWatcher) scrapeMetrics(ctx context.Context, experimentID string, targetService string) (MetricSnapshot, error) {
 	now := time.Now().UTC()
 	snapshot := MetricSnapshot{
 		ExperimentID:  experimentID,
 		TargetService: targetService,
 		Timestamp:     now,
-		Availability:  1.0, // Default to 100% available unless error rate indicates otherwise
+		Availability:  1.0,
 	}
 
 	// 1. Query Request Rate (RPS)
 	rpsQuery := fmt.Sprintf(`sum(rate(http_requests_total{service="%s"}[1m]))`, targetService)
-	if val, err := w.queryScalar(ctx, rpsQuery); err == nil {
-		snapshot.RequestRate = val
+	val, err := w.queryScalar(ctx, rpsQuery)
+	if err != nil {
+		return MetricSnapshot{}, fmt.Errorf("failed to scrape request rate: %w", err)
 	}
+	snapshot.RequestRate = val
 
 	// 2. Query P50 Latency (ms)
 	p50Query := fmt.Sprintf(`histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{service="%s"}[1m])) by (le)) * 1000`, targetService)
-	if val, err := w.queryScalar(ctx, p50Query); err == nil {
-		snapshot.P50LatencyMs = val
+	val, err = w.queryScalar(ctx, p50Query)
+	if err != nil {
+		return MetricSnapshot{}, fmt.Errorf("failed to scrape P50 latency: %w", err)
 	}
+	snapshot.P50LatencyMs = val
 
 	// 3. Query P95 Latency (ms)
 	p95Query := fmt.Sprintf(`histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service="%s"}[1m])) by (le)) * 1000`, targetService)
-	if val, err := w.queryScalar(ctx, p95Query); err == nil {
-		snapshot.P95LatencyMs = val
+	val, err = w.queryScalar(ctx, p95Query)
+	if err != nil {
+		return MetricSnapshot{}, fmt.Errorf("failed to scrape P95 latency: %w", err)
 	}
+	snapshot.P95LatencyMs = val
 
 	// 4. Query P99 Latency (ms)
 	p99Query := fmt.Sprintf(`histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="%s"}[1m])) by (le)) * 1000`, targetService)
-	if val, err := w.queryScalar(ctx, p99Query); err == nil {
-		snapshot.P99LatencyMs = val
+	val, err = w.queryScalar(ctx, p99Query)
+	if err != nil {
+		return MetricSnapshot{}, fmt.Errorf("failed to scrape P99 latency: %w", err)
 	}
+	snapshot.P99LatencyMs = val
 
 	// 5. Query Error Rate percentage (0.0 to 1.0)
 	errQuery := fmt.Sprintf(`sum(rate(http_requests_total{service="%s",status=~"5.."}[1m])) / sum(rate(http_requests_total{service="%s"}[1m]))`, targetService, targetService)
-	if val, err := w.queryScalar(ctx, errQuery); err == nil {
-		snapshot.ErrorRate = val
-		snapshot.Availability = 1.0 - val
-		if snapshot.Availability < 0 {
-			snapshot.Availability = 0
-		}
+	val, err = w.queryScalar(ctx, errQuery)
+	if err != nil {
+		return MetricSnapshot{}, fmt.Errorf("failed to scrape error rate: %w", err)
+	}
+	snapshot.ErrorRate = val
+	snapshot.Availability = 1.0 - val
+	if snapshot.Availability < 0 {
+		snapshot.Availability = 0
 	}
 
-	// 6. Query CPU Utilization (%)
+	// 6. Optional Container Metrics (CPU and Memory)
 	cpuQuery := fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{container="%s"}[1m])) * 100`, targetService)
 	if val, err := w.queryScalar(ctx, cpuQuery); err == nil {
 		snapshot.CPUUtilization = val
 	}
 
-	// 7. Query Memory Utilization (MB)
 	memQuery := fmt.Sprintf(`sum(container_memory_working_set_bytes{container="%s"}) / 1024 / 1024`, targetService)
 	if val, err := w.queryScalar(ctx, memQuery); err == nil {
 		snapshot.MemoryUtilization = val
 	}
 
-	return snapshot
+	return snapshot, nil
 }
 
 // queryScalar queries Prometheus PromQL and extracts the first float64 value returned.
@@ -219,6 +233,10 @@ func (w *PrometheusWatcher) queryScalar(ctx context.Context, promQL string) (flo
 	val, err := strconv.ParseFloat(valStr, 64)
 	if err != nil {
 		return 0, fmt.Errorf("failed to parse float value %q: %w", valStr, err)
+	}
+
+	if math.IsNaN(val) || math.IsInf(val, 0) {
+		return 0, fmt.Errorf("Prometheus returned non-finite value (%v)", val)
 	}
 
 	return val, nil

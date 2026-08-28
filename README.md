@@ -106,6 +106,7 @@ damascus/
     ├── LLD.md                          # Low-Level Design, Go models & DDL
     ├── CLOUD_COMPUTING_CONCEPTS.md     # Cloud resilience principles & academic mapping
     ├── IMPLEMENTATION_PLAN.md          # 12-phase execution plan & master checklist
+    ├── PROGRESS.md                     # Engineering progress & decision log
     └── hld.png                         # High-level architecture diagram
 ```
 

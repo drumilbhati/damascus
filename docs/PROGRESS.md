@@ -4,7 +4,7 @@
 
 ---
 
-## 📅 Log: August 29, 2026
+## 📅 Log: August 28, 2026
 
 ### 🔹 Core Execution Engines: StressEngine, WatcherEngine & SafetyController
 - **Author / Contributor**: @Vidhan
@@ -46,7 +46,8 @@
     - **P50 Latency**: `histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{service="<target>"}[1m])) by (le)) * 1000`
     - **P95 Latency**: `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service="<target>"}[1m])) by (le)) * 1000`
     - **P99 Latency**: `histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{service="<target>"}[1m])) by (le)) * 1000`
-    - **Error Rate & Availability**: `sum(rate(http_requests_total{service="<target>",status=~"5.."}[1m])) / sum(rate(http_requests_total{service="<target>"}[1m]))`
+    - **Error Rate (5xx Ratio)**: `sum(rate(http_requests_total{service="<target>",status=~"5.."}[1m])) / sum(rate(http_requests_total{service="<target>"}[1m]))`
+    - **Availability (Success Ratio)**: `1.0 - ErrorRate` (defined as the non-5xx success ratio required by the safety contract)
     - **Container CPU & Memory**: `container_cpu_usage_seconds_total` and `container_memory_working_set_bytes`.
   - **Channel Streaming**: Streams snapshots asynchronously over a Go channel (`<-chan MetricSnapshot`) and safely closes the channel upon test completion or `Stop()`.
 - **How to Check / Test It**:
@@ -145,9 +146,9 @@
 - **Author / Contributor**: @drumilbhati
 - **PR / Branch**: `feat/phase-1.2-Implement-observability-connectivity-probing-and-Jaeger/Prometheus-API-verification` (Merged: `71db91f`)
 - **Components Implemented**:
-  - `internal/deployments/docker-compose.otel-demo.yaml` (OTel Demo target mesh)
-  - `internal/deployments/otel-collector-config.yaml`
-  - `internal/deployments/prometheus.yaml` (1s sub-second scrape configuration)
+  - `deployments/docker-compose.otel-demo.yaml` (OTel Demo target mesh)
+  - `deployments/otel-collector-config.yaml`
+  - `deployments/prometheus.yaml` (1s sub-second scrape configuration)
   - `internal/config/config.go` (`EnvironmentConfig`, `HealthStatus`)
   - `internal/observability/checker.go` (`Checker`) & `checker_test.go`
 - **Core Logic & Design Rationale**:

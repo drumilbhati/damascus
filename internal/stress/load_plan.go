@@ -24,6 +24,9 @@ func (p LoadPlan) Validate() error {
 	if p.MaxRate < p.InitialRate {
 		return fmt.Errorf("max_rate (%d) cannot be less than initial_rate (%d)", p.MaxRate, p.InitialRate)
 	}
+	if p.InitialRate < p.MaxRate && p.StepRate <= 0 {
+		return fmt.Errorf("step_rate must be greater than 0 when initial_rate is less than max_rate")
+	}
 	if p.StepRate < 0 {
 		return fmt.Errorf("step_rate cannot be negative")
 	}
