@@ -1,25 +1,27 @@
 # DAMASCUS — Implementation Roadmap & Execution Checklist
 
-**Telemetry-Driven Autonomous Resilience & Capacity Testing Platform**
+> **Telemetry-Driven Autonomous Resilience & Capacity Testing Platform**
+> 
+> *For detailed daily updates, authorship, and logic rationale, see **[`docs/PROGRESS.md`](PROGRESS.md)**.*
 
 ---
 
 ## 🗺️ Roadmap Overview
 
-DAMASCUS is divided into **12 structured development phases**. By targeting standard OpenTelemetry environments (such as the official **OpenTelemetry Astronomy Shop Demo**) or any pre-instrumented microservice mesh, development is focused 100% on the core **DAMASCUS Control Plane**, graph scoring algorithms, real-time safety enforcement, and capacity analysis.
+DAMASCUS is divided into **12 structured development phases**. By targeting standard OpenTelemetry environments (such as the official **OpenTelemetry Astronomy Shop Demo**) or any pre-instrumented microservice mesh, development is focused on the core **DAMASCUS Control Plane**, graph scoring algorithms, real-time safety enforcement, and capacity analysis.
 
 ```mermaid
 gantt
     title DAMASCUS Implementation Roadmap
     dateFormat  YYYY-MM-DD
     section Phase 1 - Foundations & Ingestion
-    Target Environment & Observability Setup :p1, 2026-08-20, 2d
-    Go Project Domain & Interfaces           :p2, after p1, 1d
+    Target Environment & Observability Setup :done, p1, 2026-08-20, 2d
+    Go Project Domain & Interfaces           :done, p2, after p1, 1d
     section Phase 2 - Control & Analysis Engines
-    StressEngine & HTTP Worker Pools         :p3, after p2, 2d
-    WatcherEngine & Prometheus Poller        :p4, after p3, 2d
-    SafetyController & Fast-Path Cancel      :p5, after p4, 1d
-    GraphAnalyser & Criticality Scoring      :p6, after p5, 2d
+    StressEngine & HTTP Worker Pools         :done, p3, after p2, 2d
+    WatcherEngine & Prometheus Poller        :done, p4, after p3, 2d
+    SafetyController & Fast-Path Cancel      :done, p5, after p4, 1d
+    GraphAnalyser & Criticality Scoring      :active, p6, after p5, 2d
     section Phase 3 - Orchestration & Storage
     ExperimentManager 8-State Machine        :p7, after p6, 2d
     Kafka Event Backbone                     :p8, after p7, 2d
@@ -38,65 +40,60 @@ gantt
 > [!NOTE]
 > DAMASCUS connects to standard cloud observability backends (Jaeger and Prometheus), allowing it to target standard suites like the OpenTelemetry Astronomy Shop Demo without manual microservice boilerplate.
 
-- [ ] **1.1 Observability Stack Deployment**
-  - [ ] Deploy OpenTelemetry Astronomy Shop Demo (or target mesh) with OTel Collector, Jaeger, and Prometheus.
-  - [ ] Verify Jaeger tracing web UI and API availability (`http://localhost:16686`).
-  - [ ] Verify Prometheus metrics endpoint scraping target services (`http://localhost:9090`).
-- [ ] **1.2 Ingestion & Connectivity Probing**
-  - [ ] Test Jaeger traces retrieval (`GET /api/traces?service=frontend`).
-  - [ ] Test Jaeger dependencies graph retrieval (`GET /api/dependencies`).
-  - [ ] Test Prometheus PromQL RED metrics queries (Rate, Error, Duration P50/P95/P99).
-  - [ ] Implement `CheckObservabilityStack(ctx)` connectivity probe in Go.
+- [x] **1.1 Observability Stack Deployment**
+  - [x] Deploy OpenTelemetry Astronomy Shop Demo (or target mesh) with OTel Collector, Jaeger, and Prometheus.
+  - [x] Verify Jaeger tracing web UI and API availability (`http://localhost:16686`).
+  - [x] Verify Prometheus metrics endpoint scraping target services (`http://localhost:9090`).
+- [x] **1.2 Ingestion & Connectivity Probing**
+  - [x] Test Jaeger traces retrieval (`GET /api/traces?service=frontend`).
+  - [x] Test Jaeger dependencies graph retrieval (`GET /api/dependencies`).
+  - [x] Test Prometheus PromQL RED metrics queries (Rate, Error, Duration P50/P95/P99).
+  - [x] Implement `CheckObservabilityStack(ctx)` connectivity probe in Go (`internal/observability/checker.go`).
 
 ---
 
 ### Phase 2: Go Domain Models & Interface Contracts
-- [ ] **2.1 Directory Structure Scaffolding**
-  - [ ] `cmd/damascus/` (CLI & daemon entrypoint).
-  - [ ] `internal/config/` (environment configuration & flags).
-  - [ ] `internal/graph/` (dependency graph models & scoring logic).
-  - [ ] `internal/stress/` (load engine & worker pool).
-  - [ ] `internal/watcher/` (Prometheus metric poller).
-  - [ ] `internal/safety/` (safety controller & SLA evaluations).
-  - [ ] `internal/experiment/` (orchestrator & 8-state machine).
-  - [ ] `internal/capacity/` (capacity & recovery calculations).
-  - [ ] `internal/report/` (JSON & HTML report builder).
-  - [ ] `internal/events/` (Kafka producer & event schemas).
-  - [ ] `internal/storage/` (PostgreSQL repository & migrations).
-  - [ ] `internal/api/` (REST API handlers & routing).
-- [ ] **2.2 Core Domain Structs & Enums**
-  - [ ] Define `ExperimentState`, `ExperimentType`, `ExperimentConfig`, `Experiment`.
-  - [ ] Define `DependencyGraph`, `ServiceNode`, `DependencyEdge`, `ServiceScore`.
-  - [ ] Define `LoadPlan`, `MetricSnapshot`, `SafetyPolicy`, `SafetyDecision`.
-  - [ ] Define `Observation`, `CapacityResult`, `ExperimentReport`, `DomainEvent`.
-- [ ] **2.3 Core Interface Contracts**
-  - [ ] Define `GraphAnalyzer`, `StressEngine`, `Watcher`, `SafetyController`.
-  - [ ] Define `CapacityAnalyzer`, `ReportEngine`, `ExperimentRepository`, `EventProducer`.
+- [x] **2.1 Directory Structure Scaffolding**
+  - [x] `cmd/demo/` (interactive multi-scenario verification demo).
+  - [x] `internal/config/` (environment configuration & health statuses).
+  - [x] `internal/graph/` (dependency graph models & scoring logic).
+  - [x] `internal/stress/` (load engine & worker pool).
+  - [x] `internal/watcher/` (Prometheus metric poller).
+  - [x] `internal/safety/` (safety controller & SLA evaluations).
+  - [x] `internal/experiment/` (orchestrator & 8-state machine).
+  - [x] `internal/capacity/` (capacity & recovery calculations).
+- [x] **2.2 Core Domain Structs & Enums**
+  - [x] Define `ExperimentState`, `ExperimentType`, `ExperimentConfig`, `Experiment`.
+  - [x] Define `DependencyGraph`, `ServiceNode`, `DependencyEdge`, `ServiceScore`.
+  - [x] Define `LoadPlan`, `MetricSnapshot`, `SafetyPolicy`, `SafetyDecision`.
+  - [x] Define `Observation`, `CapacityResult`, `ExperimentReport`.
+- [ ] **2.3 Core Top-Level Interfaces Package**
+  - [ ] Consolidate global interface contracts for cross-package dependency injection.
 
 ---
 
 ### Phase 3: StressEngine & HTTP Worker Pools
-- [ ] **3.1 Load Generation Engine**
-  - [ ] Implement rate-regulated worker pool using `time.Ticker`.
-  - [ ] Support stepped load plans (`InitialRate` $\rightarrow$ `StepRate` per `StepDuration`).
-  - [ ] Support smooth linear ramp-up load plans.
-- [ ] **3.2 Concurrency & Fast Teardown**
-  - [ ] Bind worker goroutines strictly to execution `context.Context`.
-  - [ ] Implement immediate zero-leak goroutine termination on `<-ctx.Done()`.
-  - [ ] Unit tests for rate precision, step transitions, and cancellation responsiveness.
+- [x] **3.1 Load Generation Engine**
+  - [x] Implement rate-regulated worker pool using high-precision 10ms tick accumulator (`internal/stress/engine.go`).
+  - [x] Support stepped load plans (`InitialRate` $\rightarrow$ `StepRate` per `StepDurationSeconds`).
+  - [x] Lock-free atomic metric counters (`TotalRequests`, `SuccessCount`, `ErrorCount`, `DroppedCount`).
+- [x] **3.2 Concurrency & Fast Teardown**
+  - [x] Bind worker goroutines strictly to execution `context.Context`.
+  - [x] Implement immediate zero-leak goroutine termination on `<-ctx.Done()`.
+  - [x] Unit tests for rate precision, step transitions, and cancellation responsiveness (`internal/stress/engine_test.go`).
 
 ---
 
 ### Phase 4: WatcherEngine & Prometheus Poller
-- [ ] **4.1 PromQL Client Implementation**
-  - [ ] Implement sub-second PromQL query client for request rate (RPS).
-  - [ ] Query P50, P95, and P99 latency percentiles via histogram quantiles.
-  - [ ] Calculate error rate percentage (`5xx` errors / total requests) and availability.
-  - [ ] Scrape CPU and Memory container utilization metrics where available.
-- [ ] **4.2 Streaming Metric Snapshots**
-  - [ ] Stream snapshots through Go channel (`<-chan watcher.MetricSnapshot`).
-  - [ ] Handle Prometheus query timeouts and network resilience.
-  - [ ] Unit & integration tests against mock Prometheus API server.
+- [x] **4.1 PromQL Client Implementation**
+  - [x] Implement sub-second PromQL query client for request rate (RPS) (`internal/watcher/poller.go`).
+  - [x] Query P50, P95, and P99 latency percentiles via histogram quantiles.
+  - [x] Calculate error rate percentage (`5xx` errors / total requests) and availability.
+  - [x] Scrape CPU and Memory container utilization metrics where available.
+- [x] **4.2 Streaming Metric Snapshots**
+  - [x] Stream snapshots through Go channel (`<-chan watcher.MetricSnapshot`).
+  - [x] Handle Prometheus query timeouts and network resilience.
+  - [x] Unit & integration tests against mock Prometheus API server (`internal/watcher/poller_test.go`).
 
 ---
 
@@ -104,14 +101,14 @@ gantt
 > [!IMPORTANT]
 > Emergency halts execute directly in-memory via `context.CancelFunc()`, guaranteeing sub-millisecond reaction times independent of Kafka or network stability.
 
-- [ ] **5.1 Threshold Evaluation Logic**
-  - [ ] Implement SLA limit checks: P95 latency > `MaxP95LatencyMs`.
-  - [ ] Implement SLA limit checks: Error rate > `MaxErrorRate`.
-  - [ ] Implement SLA limit checks: Availability < `MinAvailability`.
-- [ ] **5.2 Fast-Path Circuit Breaker Wiring**
-  - [ ] Connect `WatcherEngine` $\rightarrow$ `SafetyController` $\rightarrow$ `context.CancelFunc`.
-  - [ ] Benchmark cancellation latency to verify sub-millisecond execution.
-  - [ ] Unit tests with boundary threshold fixtures (normal, threshold-edge, hard-breach).
+- [x] **5.1 Threshold Evaluation Logic**
+  - [x] Implement SLA limit checks: P95 latency > `MaxP95LatencyMs` (`internal/safety/controller.go`).
+  - [x] Implement SLA limit checks: Error rate > `MaxErrorRate`.
+  - [x] Implement SLA limit checks: Availability < `MinAvailability`.
+- [x] **5.2 Fast-Path Circuit Breaker Wiring**
+  - [x] Connect `WatcherEngine` $\rightarrow$ `SafetyController` $\rightarrow$ `context.CancelFunc`.
+  - [x] Benchmark cancellation latency to verify sub-millisecond execution in interactive demo.
+  - [x] Unit tests with boundary threshold fixtures (`internal/safety/controller_test.go`).
 
 ---
 

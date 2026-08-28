@@ -71,6 +71,7 @@ The technical specifications and architectural designs are structured into modul
 - **[Low-Level Design (`docs/LLD.md`)](docs/LLD.md)**: Go domain models, interface contracts, 8-state machine, criticality scoring formula, database DDLs, and REST API specifications.
 - **[Cloud Computing Concepts (`docs/CLOUD_COMPUTING_CONCEPTS.md`)](docs/CLOUD_COMPUTING_CONCEPTS.md)**: Academic mapping to core cloud principles, telemetry-derived intelligence, Kafka event backbone vs. in-memory safety stop, and comparative analysis against traditional load tools.
 - **[Implementation Roadmap & Checklist (`docs/IMPLEMENTATION_PLAN.md`)](docs/IMPLEMENTATION_PLAN.md)**: 12-phase execution roadmap and master deliverable checklist.
+- **[Engineering Progress & Decision Log (`docs/PROGRESS.md`)](docs/PROGRESS.md)**: Chronological dev log, logic rationale, authorship, and verification history.
 
 ---
 
