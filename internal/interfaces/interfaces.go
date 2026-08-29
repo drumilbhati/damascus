@@ -14,7 +14,7 @@ import (
 
 // GraphAnalyzer extracts traces from Jaeger / OTel and ranks service criticality.
 type GraphAnalyzer interface {
-	BuildGraph(ctx context.Context, lookbackDuration string) (*graph.DependencyGraph, error)
+	BuildGraph(ctx context.Context, lookbackDuration int) (*graph.DependencyGraph, error)
 	ScoreCriticality(g *graph.DependencyGraph) []graph.ServiceScore
 }
 
@@ -26,7 +26,7 @@ type StressEngine interface {
 
 // Watcher monitors real-time RED metrics from Prometheus.
 type Watcher interface {
-	Start(ctx context.Context, experimentID string, targetService string) error
+	Start(ctx context.Context, experimentID string, targetService string) (<-chan watcher.MetricSnapshot, error)
 	Stop()
 }
 
@@ -42,11 +42,12 @@ type CapacityAnalyzer interface {
 
 // ReportEngine compiles and exports the final experiment report.
 type ReportEngine interface {
-	Generate(exp experiment.Experiment,
+	Generate(
+		exp experiment.Experiment,
 		capResult capacity.CapacityResult,
 		scores []graph.ServiceScore,
 		observations []capacity.Observation,
-	) (capacity.ExperimentReport, error)
+	) (*capacity.ExperimentReport, error)
 }
 
 // ExperimentRepository persists experiment lifecycle data to PostgreSQL.
@@ -57,7 +58,7 @@ type ExperimentRepository interface {
 	UpdateState(ctx context.Context, id string, state experiment.ExperimentState, stopReason string) error
 	SaveObservation(ctx context.Context, expID string, obs capacity.Observation) error
 	GetObservations(ctx context.Context, expID string) ([]capacity.Observation, error)
-	SaveReport(ctx context.Context, report capacity.ExperimentReport) error
+	SaveReport(ctx context.Context, report *capacity.ExperimentReport) error
 	GetReport(ctx context.Context, expID string) (*capacity.ExperimentReport, error)
 }
 
