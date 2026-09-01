@@ -15,7 +15,8 @@ type WorkerPool struct {
 	targetRate     int // Target requests per second
 	ticker         *time.Ticker
 	wg             sync.WaitGroup
-	workCh         chan func() // Buffered channel for work tasks
+	workCh         chan func() // Buffered channel for queued work
+	dispatchCh     chan func() // Channel used by dispatcher to hand work to workers
 	ctx            context.Context
 	cancel         context.CancelFunc
 }
@@ -26,16 +27,23 @@ func NewWorkerPool(maxConcurrency int, targetRate int) *WorkerPool {
 		maxConcurrency: maxConcurrency,
 		targetRate:     targetRate,
 		workCh:         make(chan func(), maxConcurrency),
+		dispatchCh:     make(chan func(), maxConcurrency),
 	}
 }
 
 // Start initializes and runs the worker pool.
 func (wp *WorkerPool) Start(ctx context.Context) error {
+	if wp.maxConcurrency <= 0 {
+		return fmt.Errorf("max concurrency must be greater than 0, got %d", wp.maxConcurrency)
+	}
 	if wp.targetRate <= 0 {
 		return fmt.Errorf("target rate must be greater than 0, got %d", wp.targetRate)
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-	// Calculate tick interval: rate-limit based on targetRate
+	// Calculate tick interval: rate-limit based on targetRate.
 	tickInterval := time.Second / time.Duration(wp.targetRate)
 	if tickInterval <= 0 {
 		return fmt.Errorf("computed ticker interval must be positive, got %v", tickInterval)
@@ -44,13 +52,11 @@ func (wp *WorkerPool) Start(ctx context.Context) error {
 	wp.ctx, wp.cancel = context.WithCancel(ctx)
 	wp.ticker = time.NewTicker(tickInterval)
 
-	// Start worker goroutines (respecting maxConcurrency)
 	for i := 0; i < wp.maxConcurrency; i++ {
 		wp.wg.Add(1)
 		go wp.worker()
 	}
 
-	// Start dispatcher loop
 	wp.wg.Add(1)
 	go wp.dispatcher()
 
@@ -64,23 +70,37 @@ func (wp *WorkerPool) dispatcher() {
 	for {
 		select {
 		case <-wp.ctx.Done():
-			close(wp.workCh)
 			return
-
 		case <-wp.ticker.C:
-			// On each tick, attempt to dispatch work (non-blocking)
-			// This ensures rate limiting: only maxConcurrency tasks
-			// can run in parallel.
+			select {
+			case task := <-wp.workCh:
+				if task == nil {
+					continue
+				}
+				select {
+				case wp.dispatchCh <- task:
+				case <-wp.ctx.Done():
+					return
+				}
+			default:
+				// No queued work to dispatch on this tick.
+			}
 		}
 	}
 }
 
-// worker processes tasks from the work channel.
+// worker processes tasks dispatched by the rate-limited scheduler.
 func (wp *WorkerPool) worker() {
 	defer wp.wg.Done()
 
-	for task := range wp.workCh {
-		if task != nil {
+	for {
+		select {
+		case <-wp.ctx.Done():
+			return
+		case task := <-wp.dispatchCh:
+			if task == nil {
+				continue
+			}
 			task()
 		}
 	}
@@ -88,15 +108,22 @@ func (wp *WorkerPool) worker() {
 
 // Submit enqueues a task for execution, respecting concurrency bounds.
 func (wp *WorkerPool) Submit(task func()) error {
+	if task == nil {
+		return fmt.Errorf("task cannot be nil")
+	}
+	if wp.ctx == nil {
+		return fmt.Errorf("worker pool has not been started")
+	}
+	if err := wp.ctx.Err(); err != nil {
+		return fmt.Errorf("worker pool is shutting down: %w", err)
+	}
+
 	select {
 	case <-wp.ctx.Done():
 		return fmt.Errorf("worker pool is shutting down")
-
 	case wp.workCh <- task:
 		return nil
-
 	default:
-		// Buffer full; task cannot be enqueued immediately
 		return fmt.Errorf("worker pool queue full, max concurrency reached")
 	}
 }

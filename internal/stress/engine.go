@@ -97,8 +97,12 @@ func (e *Engine) sendRequest(ctx context.Context, plan LoadPlan) {
 		return
 	}
 	if resp != nil {
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		if _, copyErr := io.Copy(io.Discard, resp.Body); copyErr != nil {
+			fmt.Printf("Error draining response body: %v\n", copyErr)
+		}
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			fmt.Printf("Error closing response body: %v\n", closeErr)
+		}
 	}
 
 	fmt.Printf("Request to %s returned status %s\n", plan.TargetURL, resp.Status)

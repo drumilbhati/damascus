@@ -73,7 +73,11 @@ func (c *Checker) probeEndpoint(ctx context.Context, url string, requireOK bool)
 	if err != nil {
 		return fmt.Errorf("failed to reach %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			fmt.Printf("observability checker: closing response body: %v\n", closeErr)
+		}
+	}()
 	_, _ = io.Copy(io.Discard, resp.Body)
 
 	if requireOK && resp.StatusCode != http.StatusOK {
@@ -95,7 +99,11 @@ func (c *Checker) probePrometheus(ctx context.Context, url string) error {
 	if err != nil {
 		return fmt.Errorf("failed to reach %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			fmt.Printf("observability checker: closing response body: %v\n", closeErr)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status code %d from %s", resp.StatusCode, url)

@@ -128,7 +128,11 @@ func (c *Client) sendRequest(ctx context.Context, plan LoadPlan) error {
 	// Drain and close the body so the connection returns to the pool.
 	// Capture read errors (e.g. context deadline during body transfer) and
 	// surface them before evaluating the status code so they are never lost.
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			fmt.Printf("stress client: closing response body: %v\n", closeErr)
+		}
+	}()
 	if _, copyErr := io.Copy(io.Discard, resp.Body); copyErr != nil {
 		return fmt.Errorf("stress client: reading response body: %w", copyErr)
 	}
