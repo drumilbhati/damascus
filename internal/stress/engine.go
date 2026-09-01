@@ -12,10 +12,11 @@ import (
 
 // Engine implements the interfaces.StressEngine contract.
 type Engine struct {
-	client *http.Client
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	mu     sync.Mutex
+	client  *http.Client
+	cancel  context.CancelFunc
+	running bool
+	wg      sync.WaitGroup
+	mu      sync.Mutex
 }
 
 // NewEngine initializes a new stress engine instance.
@@ -30,31 +31,44 @@ func NewEngine(client *http.Client) *Engine {
 
 // Start initiates the rate-controlled traffic generation.
 func (e *Engine) Start(ctx context.Context, plan LoadPlan) error {
+	if plan.InitialRate <= 0 {
+		return fmt.Errorf("initial rate must be greater than 0, got %d", plan.InitialRate)
+	}
+	if plan.InitialRate > 1_000_000_000 {
+		return fmt.Errorf("initial rate exceeds maximum supported limit of 1,000,000,000 req/s, got %d", plan.InitialRate)
+	}
+
+	interval := time.Second / time.Duration(plan.InitialRate)
+	if interval <= 0 {
+		return fmt.Errorf("computed ticker interval must be positive, got %v", interval)
+	}
+
 	e.mu.Lock()
-	// TODO 1: Wrap ctx with context.WithCancel so e.Stop() can trigger cancellation
-	// Save the cancel function in e.cancel
+	if e.running {
+		e.mu.Unlock()
+		return fmt.Errorf("stress engine is already running an active load plan")
+	}
+	e.running = true
 	ctx, e.cancel = context.WithCancel(ctx)
 	e.mu.Unlock()
 
-	// TODO 2: Compute ticker interval from plan.InitialRate (e.g. time.Second / rate)
-	rate := plan.InitialRate
-	if rate <= 0 {
-		rate = 1
-	}
-	ticker := time.NewTicker(time.Second / time.Duration(rate)) // replace with computed interval
+	defer func() {
+		e.mu.Lock()
+		e.running = false
+		e.cancel = nil
+		e.mu.Unlock()
+	}()
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
-			// TODO 3: Context was cancelled (Emergency stop or timeout)
-			// Wait for active workers in e.wg and return ctx.Err()
 			e.wg.Wait()
 			return ctx.Err()
 
 		case <-ticker.C:
-			// TODO 4: Dispatch an HTTP worker goroutine
-			// Increment e.wg, launch goroutine, and call e.sendRequest(ctx, plan)
 			e.wg.Add(1)
 			go func() {
 				e.sendRequest(ctx, plan)
@@ -65,11 +79,8 @@ func (e *Engine) Start(ctx context.Context, plan LoadPlan) error {
 
 // sendRequest executes a single HTTP request with context propagation.
 func (e *Engine) sendRequest(ctx context.Context, plan LoadPlan) {
-	// TODO 5: Remember to call defer e.wg.Done()
 	defer e.wg.Done()
 
-	// TODO 6: Create http.NewRequestWithContext using ctx, plan.Method, and plan.TargetURL
-	// Send request via e.client.Do(req) and close response body
 	var body io.Reader
 	if plan.Payload != "" {
 		body = strings.NewReader(plan.Payload)
@@ -90,19 +101,17 @@ func (e *Engine) sendRequest(ctx context.Context, plan LoadPlan) {
 		resp.Body.Close()
 	}
 
-	// Optionally, log the response status code
 	fmt.Printf("Request to %s returned status %s\n", plan.TargetURL, resp.Status)
 }
 
 // Stop cleanly aborts all in-flight workers and dispatch loops.
 func (e *Engine) Stop() {
 	e.mu.Lock()
-	defer e.mu.Unlock()
+	cancel := e.cancel
+	e.mu.Unlock()
 
-	// TODO 7: If e.cancel is not nil, invoke it to signal all workers
-	// Wait for e.wg to drain
-	if e.cancel != nil {
-		e.cancel()
+	if cancel != nil {
+		cancel()
 		e.wg.Wait()
 	}
 }
