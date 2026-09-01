@@ -127,14 +127,48 @@ package stress
 import "time"
 
 type LoadPlan struct {
-	TargetURL    string        `json:"target_url"`
-	Method       string        `json:"method"` // GET, POST, etc.
-	Payload      []byte        `json:"payload,omitempty"`
-	InitialRate  int           `json:"initial_rate"`
-	StepRate     int           `json:"step_rate"`
-	MaxRate      int           `json:"max_rate"`
-	StepDuration time.Duration `json:"step_duration"`
+	TargetURL           string `json:"target_url"`
+	Method              string `json:"method"` // GET, POST, etc.
+	Payload             string `json:"payload,omitempty"`
+	InitialRate         int    `json:"initial_rate"`
+	StepRate            int    `json:"step_rate"`
+	MaxRate             int    `json:"max_rate"`
+	StepDurationSeconds int    `json:"step_duration_seconds"`
 }
+
+// ClientConfig holds the tunable parameters for the http.Transport and
+// per-request timeouts used by the stress engine's HTTP client wrapper.
+// All fields are optional; zero values fall back to production defaults.
+type ClientConfig struct {
+	// MaxIdleConns – total idle keep-alive connections across all hosts.
+	// Default: 1000.
+	MaxIdleConns int
+
+	// MaxIdleConnsPerHost – idle connections kept per target host.
+	// Default: 100.
+	MaxIdleConnsPerHost int
+
+	// IdleConnTimeout – maximum time a keep-alive connection may sit idle
+	// before being closed. Default: 90 s.
+	IdleConnTimeout time.Duration
+
+	// RequestTimeout – end-to-end timeout per HTTP request (dial + TLS +
+	// send + read body). Applied via context.WithTimeout on each call.
+	// Default: 30 s.
+	RequestTimeout time.Duration
+}
+
+// Client wraps *http.Client with a tuned http.Transport and exposes a
+// single reusable sendRequest method. It is safe for concurrent use.
+//
+// Construct with NewClient(cfg ClientConfig) *Client.
+//
+// sendRequest(ctx context.Context, plan LoadPlan) error
+//   - Dispatches GET or POST based on plan.Method (case-insensitive).
+//   - Applies plan.Payload as the JSON body for POST requests.
+//   - Drains and closes the response body unconditionally to return the
+//     TCP connection to the pool and prevent memory leaks.
+//   - Returns a non-nil error for 4xx/5xx status codes or network failure.
 ```
 
 ### 2.4 Watcher & Metric Snapshot Types
@@ -240,7 +274,11 @@ type GraphAnalyzer interface {
 	ScoreCriticality(g *graph.DependencyGraph) []graph.ServiceScore
 }
 
-// StressEngine executes controlled HTTP/gRPC load plans
+// StressEngine executes controlled HTTP/gRPC load plans.
+// Internally it uses stress.Client (see internal/stress/client.go) which
+// wraps http.Transport with configurable connection-pool parameters
+// (MaxIdleConns=1000, MaxIdleConnsPerHost=100, IdleConnTimeout=90s) and
+// dispatches requests via sendRequest with per-call context deadlines.
 type StressEngine interface {
 	Start(ctx context.Context, plan stress.LoadPlan) error
 	Stop()
