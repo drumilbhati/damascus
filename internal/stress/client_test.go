@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -83,19 +84,18 @@ func TestSendRequest_POST_200(t *testing.T) {
 
 // ─── sendRequest – method normalisation ──────────────────────────────────────
 
-func TestSendRequest_UnknownMethodFallsBackToGET(t *testing.T) {
-	srv := newTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Errorf("expected fallback to GET, got %s", r.Method)
-		}
-		w.WriteHeader(http.StatusOK)
-	})
-
+// TestSendRequest_UnsupportedMethodReturnsError verifies that a method other
+// than GET or POST is rejected immediately, without making any network call.
+func TestSendRequest_UnsupportedMethodReturnsError(t *testing.T) {
 	c := NewClient(ClientConfig{})
-	plan := LoadPlan{TargetURL: srv.URL, Method: "DELETE"}
+	plan := LoadPlan{TargetURL: "http://127.0.0.1:19999", Method: "DELETE"}
 
-	if err := c.sendRequest(context.Background(), plan); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	err := c.sendRequest(context.Background(), plan)
+	if err == nil {
+		t.Fatal("expected error for unsupported method, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsupported method") {
+		t.Errorf("expected 'unsupported method' in error message, got: %v", err)
 	}
 }
 
@@ -185,5 +185,35 @@ func TestSendRequest_LargeBodyDrained(t *testing.T) {
 
 	if err := c.sendRequest(context.Background(), plan); err != nil {
 		t.Fatalf("unexpected error draining 1 MiB body: %v", err)
+	}
+}
+
+// TestSendRequest_BodyReadTimeout verifies that a context deadline expiring
+// during the response-body drain is surfaced as an error even when the HTTP
+// status line was 200 OK. The server flushes headers immediately but then
+// stalls before sending the body, triggering io.Copy to hit the deadline.
+func TestSendRequest_BodyReadTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Flush status + headers immediately so http.Do returns.
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Stall the body long enough for the client timeout to fire.
+		time.Sleep(300 * time.Millisecond)
+		_, _ = w.Write([]byte("late body"))
+	}))
+	t.Cleanup(srv.Close)
+
+	// RequestTimeout is short enough to expire while the body is being drained.
+	c := NewClient(ClientConfig{RequestTimeout: 80 * time.Millisecond})
+	plan := LoadPlan{TargetURL: srv.URL, Method: "GET"}
+
+	err := c.sendRequest(context.Background(), plan)
+	if err == nil {
+		t.Fatal("expected body-read timeout error, got nil")
+	}
+	if !strings.Contains(err.Error(), "reading response body") {
+		t.Errorf("expected 'reading response body' in error, got: %v", err)
 	}
 }

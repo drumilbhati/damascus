@@ -102,6 +102,12 @@ func (c *Client) sendRequest(ctx context.Context, plan LoadPlan) error {
 	var err error
 
 	switch strings.ToUpper(plan.Method) {
+	case http.MethodGet:
+		req, err = http.NewRequestWithContext(reqCtx, http.MethodGet, plan.TargetURL, nil)
+		if err != nil {
+			return fmt.Errorf("stress client: build GET request: %w", err)
+		}
+
 	case http.MethodPost:
 		body := strings.NewReader(plan.Payload)
 		req, err = http.NewRequestWithContext(reqCtx, http.MethodPost, plan.TargetURL, body)
@@ -110,11 +116,8 @@ func (c *Client) sendRequest(ctx context.Context, plan LoadPlan) error {
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-	default: // treat anything else as GET
-		req, err = http.NewRequestWithContext(reqCtx, http.MethodGet, plan.TargetURL, nil)
-		if err != nil {
-			return fmt.Errorf("stress client: build GET request: %w", err)
-		}
+	default:
+		return fmt.Errorf("stress client: unsupported method %q (only GET and POST are allowed)", plan.Method)
 	}
 
 	resp, err := c.http.Do(req)
@@ -122,9 +125,13 @@ func (c *Client) sendRequest(ctx context.Context, plan LoadPlan) error {
 		return fmt.Errorf("stress client: execute request: %w", err)
 	}
 
-	// Always drain and close the body so the connection returns to the pool.
+	// Drain and close the body so the connection returns to the pool.
+	// Capture read errors (e.g. context deadline during body transfer) and
+	// surface them before evaluating the status code so they are never lost.
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
+	if _, copyErr := io.Copy(io.Discard, resp.Body); copyErr != nil {
+		return fmt.Errorf("stress client: reading response body: %w", copyErr)
+	}
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		return fmt.Errorf("stress client: upstream returned %d %s",
