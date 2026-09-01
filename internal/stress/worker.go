@@ -15,7 +15,7 @@ type WorkerPool struct {
 	targetRate     int // Target requests per second
 	ticker         *time.Ticker
 	wg             sync.WaitGroup
-	workCh         chan func() // Buffered channel for work tasks
+	workCh         chan func() // Buffered channel for submitted tasks
 	ctx            context.Context
 	cancel         context.CancelFunc
 }
@@ -31,6 +31,10 @@ func NewWorkerPool(maxConcurrency int, targetRate int) *WorkerPool {
 
 // Start initializes and runs the worker pool.
 func (wp *WorkerPool) Start(ctx context.Context) error {
+	if wp.maxConcurrency <= 0 {
+		return fmt.Errorf("max concurrency must be greater than 0, got %d", wp.maxConcurrency)
+	}
+
 	if wp.targetRate <= 0 {
 		return fmt.Errorf("target rate must be greater than 0, got %d", wp.targetRate)
 	}
@@ -50,44 +54,38 @@ func (wp *WorkerPool) Start(ctx context.Context) error {
 		go wp.worker()
 	}
 
-	// Start dispatcher loop
-	wp.wg.Add(1)
-	go wp.dispatcher()
-
 	return nil
-}
-
-// dispatcher coordinates ticker ticks and task dispatch.
-func (wp *WorkerPool) dispatcher() {
-	defer wp.wg.Done()
-
-	for {
-		select {
-		case <-wp.ctx.Done():
-			close(wp.workCh)
-			return
-
-		case <-wp.ticker.C:
-			// On each tick, attempt to dispatch work (non-blocking)
-			// This ensures rate limiting: only maxConcurrency tasks
-			// can run in parallel.
-		}
-	}
 }
 
 // worker processes tasks from the work channel.
 func (wp *WorkerPool) worker() {
 	defer wp.wg.Done()
 
-	for task := range wp.workCh {
-		if task != nil {
-			task()
+	for {
+		select {
+		case <-wp.ctx.Done():
+			return
+		case task := <-wp.workCh:
+			if task == nil {
+				continue
+			}
+
+			select {
+			case <-wp.ctx.Done():
+				return
+			case <-wp.ticker.C:
+				task()
+			}
 		}
 	}
 }
 
 // Submit enqueues a task for execution, respecting concurrency bounds.
 func (wp *WorkerPool) Submit(task func()) error {
+	if wp.ctx == nil {
+		return fmt.Errorf("worker pool has not been started")
+	}
+
 	select {
 	case <-wp.ctx.Done():
 		return fmt.Errorf("worker pool is shutting down")
