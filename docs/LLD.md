@@ -254,6 +254,30 @@ type ExperimentReport struct {
 
 ## 3. Go Interface Specifications
 
+### 3.X Worker Pool Types
+
+```go
+type WorkerPool struct {
+    maxConcurrency int           // Maximum concurrent goroutines in flight
+    targetRate     int           // Target requests per second
+    ticker         *time.Ticker  // Synchronized ticker used to dispatch work
+}
+```
+
+Methods:
+
+```go
+func NewWorkerPool(maxConcurrency, targetRate int) *WorkerPool
+func (wp *WorkerPool) Start(ctx context.Context) error
+func (wp *WorkerPool) Submit(task func()) error
+func (wp *WorkerPool) Stop()
+```
+
+- `NewWorkerPool(maxConcurrency, targetRate) *WorkerPool` creates a worker pool with the configured concurrency and rate limits.
+- `Start(ctx context.Context) error` initializes the workers and dispatcher loop, starting the ticker-driven scheduling loop.
+- `Submit(task func()) error` enqueues a work task for execution, returning an error if the pool is shutting down or queue capacity is exceeded.
+- `Stop()` performs a graceful shutdown by canceling the context, stopping the ticker, and waiting for workers to finish.
+
 ```go
 package interfaces
 
