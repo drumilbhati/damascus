@@ -52,8 +52,13 @@ func (c *StepController) Validate() error {
 	if c.Plan.StepRate == 0 && c.Plan.MaxRate > c.Plan.InitialRate {
 		return fmt.Errorf("step_rate must be greater than 0 when max_rate exceeds initial_rate")
 	}
-	if c.StepDuration <= 0 && c.Plan.StepDurationSeconds <= 0 {
-		return fmt.Errorf("step_duration_seconds must be greater than 0")
+	if c.StepDuration <= 0 {
+		if c.Plan.StepDurationSeconds <= 0 {
+			return fmt.Errorf("step_duration_seconds must be greater than 0")
+		}
+		if c.Plan.StepDurationSeconds > MaxStepDurationSeconds {
+			return fmt.Errorf("step_duration_seconds (%d) cannot exceed %d", c.Plan.StepDurationSeconds, MaxStepDurationSeconds)
+		}
 	}
 	return nil
 }
@@ -84,7 +89,11 @@ func (c *StepController) CalculateSteps() ([]RateStep, error) {
 			break
 		}
 
-		currentRate += c.Plan.StepRate
+		if c.Plan.MaxRate-currentRate < c.Plan.StepRate {
+			currentRate = c.Plan.MaxRate
+		} else {
+			currentRate += c.Plan.StepRate
+		}
 		stepNumber++
 	}
 
@@ -135,7 +144,11 @@ func (c *StepController) Run(ctx context.Context, handler StepHandler) error {
 			break
 		}
 
-		currentRate += c.Plan.StepRate
+		if c.Plan.MaxRate-currentRate < c.Plan.StepRate {
+			currentRate = c.Plan.MaxRate
+		} else {
+			currentRate += c.Plan.StepRate
+		}
 		stepNumber++
 	}
 

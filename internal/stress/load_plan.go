@@ -13,6 +13,9 @@ type LoadPlan struct {
 	StepDurationSeconds int    `json:"step_duration_seconds"`
 }
 
+// MaxStepDurationSeconds is the maximum duration in seconds that fits within a time.Duration without overflow (int64 nanoseconds).
+const MaxStepDurationSeconds = 9223372036
+
 // Validate checks if the load plan has valid parameters.
 func (p LoadPlan) Validate() error {
 	if p.InitialRate <= 0 {
@@ -29,6 +32,9 @@ func (p LoadPlan) Validate() error {
 	}
 	if p.StepDurationSeconds <= 0 {
 		return fmt.Errorf("step_duration_seconds must be greater than 0")
+	}
+	if p.StepDurationSeconds > MaxStepDurationSeconds {
+		return fmt.Errorf("step_duration_seconds (%d) cannot exceed %d", p.StepDurationSeconds, MaxStepDurationSeconds)
 	}
 	return nil
 }

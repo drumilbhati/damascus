@@ -110,6 +110,26 @@ func TestStepController_Validate(t *testing.T) {
 			overrideDur: 50 * time.Millisecond,
 			wantErr:     false,
 		},
+		{
+			name: "step duration exceeds max seconds",
+			plan: stress.LoadPlan{
+				InitialRate:         100,
+				StepRate:            50,
+				MaxRate:             200,
+				StepDurationSeconds: 9223372037,
+			},
+			wantErr: true,
+		},
+		{
+			name: "step duration at max seconds boundary",
+			plan: stress.LoadPlan{
+				InitialRate:         100,
+				StepRate:            50,
+				MaxRate:             200,
+				StepDurationSeconds: 9223372036,
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -384,5 +404,68 @@ func TestLoadPlan_Validate(t *testing.T) {
 	}
 	if err := invalidPlan.Validate(); err == nil {
 		t.Error("expected invalid plan to fail, got nil")
+	}
+
+	overflowPlan := stress.LoadPlan{
+		InitialRate:         50,
+		StepRate:            25,
+		MaxRate:             200,
+		StepDurationSeconds: 9223372037,
+	}
+	if err := overflowPlan.Validate(); err == nil {
+		t.Error("expected overflow plan to fail validation, got nil")
+	}
+}
+
+func TestStepController_CalculateSteps_HugeStepRate(t *testing.T) {
+	// A massive StepRate that could overflow if added naively to currentRate
+	plan := stress.LoadPlan{
+		InitialRate:         100,
+		StepRate:            1 << 60, // large integer
+		MaxRate:             500,
+		StepDurationSeconds: 1,
+	}
+
+	controller := stress.NewStepController(plan)
+	steps, err := controller.CalculateSteps()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(steps) != 2 {
+		t.Fatalf("expected 2 steps, got %d", len(steps))
+	}
+	if steps[0].Rate != 100 {
+		t.Errorf("expected step 1 rate 100, got %d", steps[0].Rate)
+	}
+	if steps[1].Rate != 500 {
+		t.Errorf("expected step 2 rate capped at MaxRate 500, got %d", steps[1].Rate)
+	}
+}
+
+func TestStepController_Run_HugeStepRate(t *testing.T) {
+	plan := stress.LoadPlan{
+		InitialRate: 100,
+		StepRate:    1 << 60,
+		MaxRate:     300,
+	}
+
+	controller := stress.NewStepController(plan)
+	controller.StepDuration = 10 * time.Millisecond
+
+	var rates []int
+	err := controller.Run(context.Background(), func(ctx context.Context, step int, rate int) error {
+		rates = append(rates, rate)
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rates) != 2 {
+		t.Fatalf("expected 2 steps executed, got %d (%v)", len(rates), rates)
+	}
+	if rates[0] != 100 || rates[1] != 300 {
+		t.Errorf("expected rates [100, 300], got %v", rates)
 	}
 }
