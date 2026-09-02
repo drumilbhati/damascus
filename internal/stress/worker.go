@@ -34,12 +34,14 @@ func (wp *WorkerPool) Start(ctx context.Context) error {
 	if wp.maxConcurrency <= 0 {
 		return fmt.Errorf("max concurrency must be greater than 0, got %d", wp.maxConcurrency)
 	}
-
 	if wp.targetRate <= 0 {
 		return fmt.Errorf("target rate must be greater than 0, got %d", wp.targetRate)
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
-	// Calculate tick interval: rate-limit based on targetRate
+	// Calculate tick interval: rate-limit based on targetRate.
 	tickInterval := time.Second / time.Duration(wp.targetRate)
 	if tickInterval <= 0 {
 		return fmt.Errorf("computed ticker interval must be positive, got %v", tickInterval)
@@ -82,6 +84,9 @@ func (wp *WorkerPool) worker() {
 
 // Submit enqueues a task for execution, respecting concurrency bounds.
 func (wp *WorkerPool) Submit(task func()) error {
+	if task == nil {
+		return fmt.Errorf("task cannot be nil")
+	}
 	if wp.ctx == nil {
 		return fmt.Errorf("worker pool has not been started")
 	}
@@ -89,12 +94,9 @@ func (wp *WorkerPool) Submit(task func()) error {
 	select {
 	case <-wp.ctx.Done():
 		return fmt.Errorf("worker pool is shutting down")
-
 	case wp.workCh <- task:
 		return nil
-
 	default:
-		// Buffer full; task cannot be enqueued immediately
 		return fmt.Errorf("worker pool queue full, max concurrency reached")
 	}
 }
