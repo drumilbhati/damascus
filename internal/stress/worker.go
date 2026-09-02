@@ -15,8 +15,7 @@ type WorkerPool struct {
 	targetRate     int // Target requests per second
 	ticker         *time.Ticker
 	wg             sync.WaitGroup
-	workCh         chan func() // Buffered channel for queued work
-	dispatchCh     chan func() // Channel used by dispatcher to hand work to workers
+	workCh         chan func() // Buffered channel for submitted tasks
 	ctx            context.Context
 	cancel         context.CancelFunc
 }
@@ -27,7 +26,6 @@ func NewWorkerPool(maxConcurrency int, targetRate int) *WorkerPool {
 		maxConcurrency: maxConcurrency,
 		targetRate:     targetRate,
 		workCh:         make(chan func(), maxConcurrency),
-		dispatchCh:     make(chan func(), maxConcurrency),
 	}
 }
 
@@ -52,44 +50,16 @@ func (wp *WorkerPool) Start(ctx context.Context) error {
 	wp.ctx, wp.cancel = context.WithCancel(ctx)
 	wp.ticker = time.NewTicker(tickInterval)
 
+	// Start worker goroutines (respecting maxConcurrency)
 	for i := 0; i < wp.maxConcurrency; i++ {
 		wp.wg.Add(1)
 		go wp.worker()
 	}
 
-	wp.wg.Add(1)
-	go wp.dispatcher()
-
 	return nil
 }
 
-// dispatcher coordinates ticker ticks and task dispatch.
-func (wp *WorkerPool) dispatcher() {
-	defer wp.wg.Done()
-
-	for {
-		select {
-		case <-wp.ctx.Done():
-			return
-		case <-wp.ticker.C:
-			select {
-			case task := <-wp.workCh:
-				if task == nil {
-					continue
-				}
-				select {
-				case wp.dispatchCh <- task:
-				case <-wp.ctx.Done():
-					return
-				}
-			default:
-				// No queued work to dispatch on this tick.
-			}
-		}
-	}
-}
-
-// worker processes tasks dispatched by the rate-limited scheduler.
+// worker processes tasks from the work channel.
 func (wp *WorkerPool) worker() {
 	defer wp.wg.Done()
 
@@ -97,11 +67,17 @@ func (wp *WorkerPool) worker() {
 		select {
 		case <-wp.ctx.Done():
 			return
-		case task := <-wp.dispatchCh:
+		case task := <-wp.workCh:
 			if task == nil {
 				continue
 			}
-			task()
+
+			select {
+			case <-wp.ctx.Done():
+				return
+			case <-wp.ticker.C:
+				task()
+			}
 		}
 	}
 }
@@ -113,9 +89,6 @@ func (wp *WorkerPool) Submit(task func()) error {
 	}
 	if wp.ctx == nil {
 		return fmt.Errorf("worker pool has not been started")
-	}
-	if err := wp.ctx.Err(); err != nil {
-		return fmt.Errorf("worker pool is shutting down: %w", err)
 	}
 
 	select {

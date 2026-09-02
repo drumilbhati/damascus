@@ -274,7 +274,7 @@ func (wp *WorkerPool) Stop()
 ```
 
 - `NewWorkerPool(maxConcurrency, targetRate) *WorkerPool` creates a worker pool with the configured concurrency and rate limits.
-- `Start(ctx context.Context) error` initializes the workers and dispatcher loop, starting the ticker-driven scheduling loop.
+- `Start(ctx context.Context) error` initializes the workers and starts ticker-gated task execution.
 - `Submit(task func()) error` enqueues a work task for execution, returning an error if the pool is shutting down or queue capacity is exceeded.
 - `Stop()` performs a graceful shutdown by canceling the context, stopping the ticker, and waiting for workers to finish.
 
