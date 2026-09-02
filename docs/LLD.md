@@ -151,6 +151,40 @@ type StepController struct {
 	Plan         LoadPlan
 	StepDuration time.Duration
 }
+
+// ClientConfig holds the tunable parameters for the http.Transport and
+// per-request timeouts used by the stress engine's HTTP client wrapper.
+// All fields are optional; zero values fall back to production defaults.
+type ClientConfig struct {
+	// MaxIdleConns – total idle keep-alive connections across all hosts.
+	// Default: 1000.
+	MaxIdleConns int
+
+	// MaxIdleConnsPerHost – idle connections kept per target host.
+	// Default: 100.
+	MaxIdleConnsPerHost int
+
+	// IdleConnTimeout – maximum time a keep-alive connection may sit idle
+	// before being closed. Default: 90 s.
+	IdleConnTimeout time.Duration
+
+	// RequestTimeout – end-to-end timeout per HTTP request (dial + TLS +
+	// send + read body). Applied via context.WithTimeout on each call.
+	// Default: 30 s.
+	RequestTimeout time.Duration
+}
+
+// Client wraps *http.Client with a tuned http.Transport and exposes a
+// single reusable sendRequest method. It is safe for concurrent use.
+//
+// Construct with NewClient(cfg ClientConfig) *Client.
+//
+// sendRequest(ctx context.Context, plan LoadPlan) error
+//   - Dispatches GET or POST based on plan.Method (case-insensitive).
+//   - Applies plan.Payload as the JSON body for POST requests.
+//   - Drains and closes the response body unconditionally to return the
+//     TCP connection to the pool and prevent memory leaks.
+//   - Returns a non-nil error for 4xx/5xx status codes or network failure.
 ```
 
 ### 2.4 Watcher & Metric Snapshot Types
@@ -236,6 +270,30 @@ type ExperimentReport struct {
 
 ## 3. Go Interface Specifications
 
+### 3.X Worker Pool Types
+
+```go
+type WorkerPool struct {
+    maxConcurrency int           // Maximum concurrent goroutines in flight
+    targetRate     int           // Target requests per second
+    ticker         *time.Ticker  // Synchronized ticker used to dispatch work
+}
+```
+
+Methods:
+
+```go
+func NewWorkerPool(maxConcurrency, targetRate int) *WorkerPool
+func (wp *WorkerPool) Start(ctx context.Context) error
+func (wp *WorkerPool) Submit(task func()) error
+func (wp *WorkerPool) Stop()
+```
+
+- `NewWorkerPool(maxConcurrency, targetRate) *WorkerPool` creates a worker pool with the configured concurrency and rate limits.
+- `Start(ctx context.Context) error` initializes the workers and starts ticker-gated task execution.
+- `Submit(task func()) error` enqueues a work task for execution, returning an error if the pool is shutting down or queue capacity is exceeded.
+- `Stop()` performs a graceful shutdown by canceling the context, stopping the ticker, and waiting for workers to finish.
+
 ```go
 package interfaces
 
@@ -256,7 +314,11 @@ type GraphAnalyzer interface {
 	ScoreCriticality(g *graph.DependencyGraph) []graph.ServiceScore
 }
 
-// StressEngine executes controlled HTTP/gRPC load plans
+// StressEngine executes controlled HTTP/gRPC load plans.
+// Internally it uses stress.Client (see internal/stress/client.go) which
+// wraps http.Transport with configurable connection-pool parameters
+// (MaxIdleConns=1000, MaxIdleConnsPerHost=100, IdleConnTimeout=90s) and
+// dispatches requests via sendRequest with per-call context deadlines.
 type StressEngine interface {
 	Start(ctx context.Context, plan stress.LoadPlan) error
 	Stop()
