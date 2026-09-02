@@ -1,6 +1,6 @@
 services:
   # -------------------------------------------------------------
-  # 1. Observability Backends
+  # 1. Observability Backends & Dashboards
   # -------------------------------------------------------------
   jaeger:
     image: jaegertracing/all-in-one:latest
@@ -16,6 +16,21 @@ services:
       - ./prometheus.yaml:/etc/prometheus/prometheus.yml
     ports:
       - "9090:9090"   # Prometheus Web UI & PromQL API
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: damascus-grafana
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3000:3000"   # Grafana Dashboard UI
+    depends_on:
+      - prometheus
+      - jaeger
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.111.0
