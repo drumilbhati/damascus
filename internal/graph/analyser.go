@@ -3,7 +3,9 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -60,11 +62,9 @@ func NewAnalyzer(jaegerBaseURL string, client *http.Client) *Analyzer {
 func (a *Analyzer) BuildGraph(ctx context.Context, lookbackDuration int64) (*DependencyGraph, error) {
 	graph := NewDependencyGraph()
 
-	// TODO 1: Fetch list of active services from /api/services
-	// e.g. GET a.jaegerBaseURL + "/api/services"
-	// Decode into jaegerServicesResponse
-	url := a.jaegerBaseURL + "/api/services"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	// 1. Fetch list of active services from /api/services
+	servicesURL := a.jaegerBaseURL + "/api/services"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, servicesURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -74,23 +74,40 @@ func (a *Analyzer) BuildGraph(ctx context.Context, lookbackDuration int64) (*Dep
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("unexpected status code from jaeger /api/services: %d", resp.StatusCode)
+	}
+
 	var jaegerServices jaegerServicesResponse
 	if err := json.NewDecoder(resp.Body).Decode(&jaegerServices); err != nil {
 		return nil, err
 	}
 
-	// TODO 2: For each discovered service, query /api/traces?service=<service>&limit=50
-	// e.g. GET fmt.Sprintf("%s/api/traces?service=%s&limit=50", a.jaegerBaseURL, service)
-	// Decode into jaegerResponse
+	lookbackStr := "1h"
+	if lookbackDuration > 0 {
+		lookbackStr = fmt.Sprintf("%ds", lookbackDuration)
+	}
+
+	// 2. For each discovered service, query /api/traces
 	for _, service := range jaegerServices.Data {
-		url := a.jaegerBaseURL + "/api/traces?service=" + service + "&limit=50"
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		queryParams := url.Values{}
+		queryParams.Set("service", service)
+		queryParams.Set("limit", "50")
+		queryParams.Set("lookback", lookbackStr)
+
+		traceURL := fmt.Sprintf("%s/api/traces?%s", a.jaegerBaseURL, queryParams.Encode())
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, traceURL, nil)
 		if err != nil {
 			return nil, err
 		}
 		resp, err := a.client.Do(req)
 		if err != nil {
 			return nil, err
+		}
+
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			resp.Body.Close()
+			return nil, fmt.Errorf("unexpected status code from jaeger /api/traces: %d", resp.StatusCode)
 		}
 
 		var jaegerResp jaegerResponse
@@ -100,24 +117,7 @@ func (a *Analyzer) BuildGraph(ctx context.Context, lookbackDuration int64) (*Dep
 			return nil, err
 		}
 
-		// TODO 3: Iterate through traces and spans:
-		//   a) Build a map of spanID -> serviceName for quick parent lookup:
-		//      spanToService := make(map[string]string)
-		//   b) For each span:
-		//      childService := trace.Processes[span.ProcessID].ServiceName
-		//      graph.AddNode(childService, nil)
-		//
-		//   c) Check span.References for "CHILD_OF" parentSpanID:
-		//      parentService := spanToService[parentSpanID]
-		//      if parentService != "" && parentService != childService {
-		//          // Record edge: parentService -> childService
-		//          graph.AddEdge(DependencyEdge{
-		//		From: parentService,
-		//		To: childService,
-		//		CallCount: 1, // aggregate counts
-		//          })
-		//      }
-
+		// 3. Iterate through traces and spans:
 		for _, trace := range jaegerResp.Data {
 			spanToService := make(map[string]string)
 			for _, span := range trace.Spans {
@@ -145,7 +145,7 @@ func (a *Analyzer) BuildGraph(ctx context.Context, lookbackDuration int64) (*Dep
 		}
 	}
 
-	// TODO 4: Return the populated graph
+	// 4. Return the populated graph
 	return graph, nil
 }
 
