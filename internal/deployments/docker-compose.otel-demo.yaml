@@ -23,7 +23,11 @@ services:
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
-      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_AUTH_ANONYMOUS_ORG_NAME=Main Org.
+      - GF_AUTH_DISABLE_LOGIN_FORM=false
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ALLOW_EMBEDDING=true
     volumes:
       - ./grafana/provisioning:/etc/grafana/provisioning
     ports:
@@ -45,6 +49,17 @@ services:
     depends_on:
       - jaeger
 
+  flagd:
+    image: ghcr.io/open-feature/flagd:latest
+    container_name: damascus-flagd
+    environment:
+      - PORT=8013
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=flagd
+    depends_on:
+      - otel-collector
+
   # -------------------------------------------------------------
   # 2. Astronomy Shop Microservices
   # -------------------------------------------------------------
@@ -56,30 +71,36 @@ services:
       - FRONTEND_PORT=8080
       - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
       - CURRENCY_SERVICE_ADDR=currencyservice:7001
-      - CART_SERVICE_ADDR=cartservice:7070
+      - CART_SERVICE_ADDR=cartservice:8080
       - RECOMMENDATION_SERVICE_ADDR=recommendationservice:8080
       - SHIPPING_SERVICE_ADDR=shippingservice:50050
       - CHECKOUT_SERVICE_ADDR=checkoutservice:5050
       - AD_SERVICE_ADDR=adservice:9555
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=frontend
     ports:
       - "8080:8080"
     depends_on:
       - otel-collector
+      - flagd
 
   cartservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-cartservice
     container_name: damascus-cartservice
     environment:
-      - PORT=7070
-      - CART_SERVICE_PORT=7070
+      - PORT=8080
+      - CART_SERVICE_PORT=8080
       - VALKEY_ADDR=valkey-cart:6379
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=cartservice
     depends_on:
       - otel-collector
       - valkey-cart
+      - flagd
 
   valkey-cart:
     image: valkey/valkey:8-alpine
@@ -91,10 +112,13 @@ services:
     environment:
       - PORT=3550
       - PRODUCT_CATALOG_SERVICE_PORT=3550
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=productcatalogservice
     depends_on:
       - otel-collector
+      - flagd
 
   currencyservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-currencyservice
@@ -102,6 +126,7 @@ services:
     environment:
       - PORT=7001
       - CURRENCY_SERVICE_PORT=7001
+      - VERSION=1.11.0
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=currencyservice
     depends_on:
@@ -113,10 +138,13 @@ services:
     environment:
       - PORT=50051
       - PAYMENT_SERVICE_PORT=50051
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=paymentservice
     depends_on:
       - otel-collector
+      - flagd
 
   shippingservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-shippingservice
@@ -137,7 +165,7 @@ services:
     environment:
       - PORT=8090
       - QUOTE_SERVICE_PORT=8090
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
       - OTEL_SERVICE_NAME=quoteservice
     depends_on:
       - otel-collector
@@ -148,7 +176,9 @@ services:
     environment:
       - PORT=6060
       - EMAIL_SERVICE_PORT=6060
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - APP_ENV=production
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
       - OTEL_SERVICE_NAME=emailservice
     depends_on:
       - otel-collector
@@ -164,11 +194,14 @@ services:
       - PAYMENT_SERVICE_ADDR=paymentservice:50051
       - EMAIL_SERVICE_ADDR=http://emailservice:6060
       - CURRENCY_SERVICE_ADDR=currencyservice:7001
-      - CART_SERVICE_ADDR=cartservice:7070
+      - CART_SERVICE_ADDR=cartservice:8080
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=checkoutservice
     depends_on:
       - otel-collector
+      - flagd
 
   recommendationservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-recommendationservice
@@ -177,10 +210,13 @@ services:
       - PORT=8080
       - RECOMMENDATION_SERVICE_PORT=8080
       - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=recommendationservice
     depends_on:
       - otel-collector
+      - flagd
 
   adservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-adservice
@@ -188,10 +224,13 @@ services:
     environment:
       - PORT=9555
       - AD_SERVICE_PORT=9555
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=adservice
     depends_on:
       - otel-collector
+      - flagd
 
   # -------------------------------------------------------------
   # 3. Load Generator (Simulates user traffic in background)
@@ -201,7 +240,7 @@ services:
     container_name: damascus-loadgenerator
     environment:
       - LOCUST_HOST=http://frontend:8080
-      - LOCUST_USERS=5
+      - LOCUST_USERS=10
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=loadgenerator
     depends_on:
