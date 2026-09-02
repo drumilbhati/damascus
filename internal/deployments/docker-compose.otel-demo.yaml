@@ -57,6 +57,7 @@ services:
     image: ghcr.io/open-telemetry/demo:1.11.0-cartservice
     container_name: damascus-cartservice
     environment:
+      - PORT=7070
       - CART_SERVICE_PORT=7070
       - VALKEY_ADDR=valkey-cart:6379
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
@@ -74,6 +75,7 @@ services:
     container_name: damascus-productcatalogservice
     environment:
       - PORT=3550
+      - PRODUCT_CATALOG_SERVICE_PORT=3550
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=productcatalogservice
     depends_on:
@@ -95,6 +97,7 @@ services:
     container_name: damascus-paymentservice
     environment:
       - PORT=50051
+      - PAYMENT_SERVICE_PORT=50051
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=paymentservice
     depends_on:
@@ -118,6 +121,7 @@ services:
     container_name: damascus-quoteservice
     environment:
       - PORT=8090
+      - QUOTE_SERVICE_PORT=8090
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=quoteservice
     depends_on:
@@ -139,6 +143,7 @@ services:
     container_name: damascus-checkoutservice
     environment:
       - PORT=5050
+      - CHECKOUT_SERVICE_PORT=5050
       - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
       - SHIPPING_SERVICE_ADDR=shippingservice:50050
       - PAYMENT_SERVICE_ADDR=paymentservice:50051
@@ -154,6 +159,7 @@ services:
     image: ghcr.io/open-telemetry/demo:1.11.0-recommendationservice
     container_name: damascus-recommendationservice
     environment:
+      - PORT=8080
       - RECOMMENDATION_SERVICE_PORT=8080
       - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
@@ -166,6 +172,7 @@ services:
     container_name: damascus-adservice
     environment:
       - PORT=9555
+      - AD_SERVICE_PORT=9555
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=adservice
     depends_on:

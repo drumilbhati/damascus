@@ -26,13 +26,13 @@ func TestCheckObservabilityStack_LiveIntegration(t *testing.T) {
 
 	cfg := config.EnvironmentConfig{
 		TargetBaseURL:      "http://localhost:8080",
-		JaegerTraceBaseURL: "http://localhost:8080/jaeger/ui",
+		JaegerTraceBaseURL: "http://localhost:16686",
 		PrometheusBaseURL:  "http://localhost:9090",
 	}
 
 	status, err := checker.CheckObservabilityStack(ctx, cfg)
 	if err != nil {
-		t.Fatalf("CheckObservabilityStack returned unexpected error: %v", err)
+		t.Fatalf("CheckObservabilityStack returned unexpected error: %v, status: %+v", err, status)
 	}
 
 	statusJSON, _ := json.MarshalIndent(status, "", "  ")
