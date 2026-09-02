@@ -1,209 +1,299 @@
-# DAMASCUS — Implementation Roadmap & Execution Checklist
+# DAMASCUS — Implementation Roadmap & GitHub Issue Tracker
 
 **Telemetry-Driven Autonomous Resilience & Capacity Testing Platform**
 
 ---
 
-## 🗺️ Roadmap Overview
+## 🗺️ System Overview & Workload Allocation
 
-DAMASCUS is divided into **12 structured development phases**. By targeting standard OpenTelemetry environments (such as the official **OpenTelemetry Astronomy Shop Demo**) or any pre-instrumented microservice mesh, development is focused 100% on the core **DAMASCUS Control Plane**, graph scoring algorithms, real-time safety enforcement, and capacity analysis.
+DAMASCUS is partitioned into **12 structured development phases** mapped across **36 GitHub Issues (Issues #25 – #60)**. Work is balanced equally across the 4 core team members (9 issues each) to ensure parallel progression without blocking cross-phase dependencies.
 
-```mermaid
-gantt
-    title DAMASCUS Implementation Roadmap
-    dateFormat  YYYY-MM-DD
-    section Phase 1 - Foundations & Ingestion
-    Target Environment & Observability Setup :p1, 2026-08-20, 2d
-    Go Project Domain & Interfaces           :p2, after p1, 1d
-    section Phase 2 - Control & Analysis Engines
-    StressEngine & HTTP Worker Pools         :p3, after p2, 2d
-    WatcherEngine & Prometheus Poller        :p4, after p3, 2d
-    SafetyController & Fast-Path Cancel      :p5, after p4, 1d
-    GraphAnalyser & Criticality Scoring      :p6, after p5, 2d
-    section Phase 3 - Orchestration & Storage
-    ExperimentManager 8-State Machine        :p7, after p6, 2d
-    Kafka Event Backbone                     :p8, after p7, 2d
-    PostgreSQL Repository & DDL              :p9, after p8, 2d
-    section Phase 4 - Reporting & Delivery
-    CapacityAnalyzer & ReportEngine          :p10, after p9, 2d
-    REST API & React Dashboard               :p11, after p10, 3d
-    Docker Compose, K8s & E2E Verification   :p12, after p11, 2d
-```
+### Team Members
+* **`drumilbhati`** — Drumil Bhati
+* **`Dhairya0531`** — Dhairya Rupani
+* **`DevKansara97`** — Dev Kansara
+* **`VidhanNahar`** — Vidhan Nahar
 
 ---
 
-## ✅ Master Implementation Checklist
+## 📊 Team Issue Distribution Matrix
 
-### Phase 1: Target Environment & Observability Ingestion
-> [!NOTE]
-> DAMASCUS connects to standard cloud observability backends (Jaeger and Prometheus), allowing it to target standard suites like the OpenTelemetry Astronomy Shop Demo without manual microservice boilerplate.
-
-- [ ] **1.1 Observability Stack Deployment**
-  - [ ] Deploy OpenTelemetry Astronomy Shop Demo (or target mesh) with OTel Collector, Jaeger, and Prometheus.
-  - [ ] Verify Jaeger tracing web UI and API availability (`http://localhost:16686`).
-  - [ ] Verify Prometheus metrics endpoint scraping target services (`http://localhost:9090`).
-- [ ] **1.2 Ingestion & Connectivity Probing**
-  - [ ] Test Jaeger traces retrieval (`GET /api/traces?service=frontend`).
-  - [ ] Test Jaeger dependencies graph retrieval (`GET /api/dependencies`).
-  - [ ] Test Prometheus PromQL RED metrics queries (Rate, Error, Duration P50/P95/P99).
-  - [ ] Implement `CheckObservabilityStack(ctx)` connectivity probe in Go.
-
----
-
-### Phase 2: Go Domain Models & Interface Contracts
-- [ ] **2.1 Directory Structure Scaffolding**
-  - [ ] `cmd/damascus/` (CLI & daemon entrypoint).
-  - [ ] `internal/config/` (environment configuration & flags).
-  - [ ] `internal/graph/` (dependency graph models & scoring logic).
-  - [ ] `internal/stress/` (load engine & worker pool).
-  - [ ] `internal/watcher/` (Prometheus metric poller).
-  - [ ] `internal/safety/` (safety controller & SLA evaluations).
-  - [ ] `internal/experiment/` (orchestrator & 8-state machine).
-  - [ ] `internal/capacity/` (capacity & recovery calculations).
-  - [ ] `internal/report/` (JSON & HTML report builder).
-  - [ ] `internal/events/` (Kafka producer & event schemas).
-  - [ ] `internal/storage/` (PostgreSQL repository & migrations).
-  - [ ] `internal/api/` (REST API handlers & routing).
-- [ ] **2.2 Core Domain Structs & Enums**
-  - [ ] Define `ExperimentState`, `ExperimentType`, `ExperimentConfig`, `Experiment`.
-  - [ ] Define `DependencyGraph`, `ServiceNode`, `DependencyEdge`, `ServiceScore`.
-  - [ ] Define `LoadPlan`, `MetricSnapshot`, `SafetyPolicy`, `SafetyDecision`.
-  - [ ] Define `Observation`, `CapacityResult`, `ExperimentReport`, `DomainEvent`.
-- [ ] **2.3 Core Interface Contracts**
-  - [ ] Define `GraphAnalyzer`, `StressEngine`, `Watcher`, `SafetyController`.
-  - [ ] Define `CapacityAnalyzer`, `ReportEngine`, `ExperimentRepository`, `EventProducer`.
+| Phase | Phase Name | `drumilbhati` | `Dhairya0531` | `DevKansara97` | `VidhanNahar` |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Phase 1** | Target Mesh & Ingestion | **#25** OTel Demo Stack | **#26** Stack Checker | **#27** Domain Models | — |
+| **Phase 2** | Stress Engine | **#28** Rate Engine | **#29** HTTP Client | **#30** Ramp Planning | — |
+| **Phase 3** | Watcher Engine | — | — | — | **#31** PromQL Client<br>**#32** Stream Channels<br>**#33** Resource Scraper |
+| **Phase 4** | Safety Controller | — | — | **#34** SLA Thresholds | **#35** Circuit Breaker |
+| **Phase 5** | Graph Analyser | **#36** Trace Ingestion | **#37** Graph Scoring | **#38** Criticality Explainer | — |
+| **Phase 6** | Experiment Orchestrator | **#39** 8-State FSM | **#40** Wiring Manager | **#41** Cooldown Monitor | — |
+| **Phase 7** | Kafka Event Backbone | **#42** Kafka Producer | **#43** State Publisher | **#44** Telemetry Stream | — |
+| **Phase 8** | Persistence (PostgreSQL)| **#45** Schema & DDL | **#46** Postgres Repo | — | **#47** Bulk Ingest |
+| **Phase 9** | Capacity & Reporting | **#48** Knee Detector | **#49** Recovery Calc | **#50** Report Engine | — |
+| **Phase 10**| REST API & UI | **#51** REST API | **#52** React App | **#53** Graph Visualizer | **#54** Metric Charts |
+| **Phase 11**| Container & K8s Deploy | — | — | — | **#55** Dockerfile<br>**#56** Compose Stack<br>**#57** K8s Manifests |
+| **Phase 12**| E2E Verification | **#58** Stepped Capacity | **#59** Sub-Second Cutoff| **#60** Blast Radius | — |
+| **Total** | **36 Issues** | **9 Issues** | **9 Issues** | **9 Issues** | **9 Issues** |
 
 ---
 
-### Phase 3: StressEngine & HTTP Worker Pools
-- [ ] **3.1 Load Generation Engine**
-  - [ ] Implement rate-regulated worker pool using `time.Ticker`.
-  - [ ] Support stepped load plans (`InitialRate` $\rightarrow$ `StepRate` per `StepDuration`).
-  - [ ] Support smooth linear ramp-up load plans.
-- [ ] **3.2 Concurrency & Fast Teardown**
-  - [ ] Bind worker goroutines strictly to execution `context.Context`.
-  - [ ] Implement immediate zero-leak goroutine termination on `<-ctx.Done()`.
-  - [ ] Unit tests for rate precision, step transitions, and cancellation responsiveness.
+## 📋 Detailed Phase Breakdown & Issue Tracker
+
+### Phase 1: Target Environment & Observability Foundations
+* **[x] Issue #25: Deploy OpenTelemetry Astronomy Shop Demo Stack**
+  * **Assignee**: `@drumilbhati`
+  * **Files**: `internal/deployments/docker-compose.otel-demo.yaml`, `internal/deployments/prometheus.yaml`, `internal/deployments/otel-collector-config.yaml`
+  * **Scope**: Deploy 10+ Astronomy Shop microservices, Jaeger (`:16686`), Prometheus (`:9090`), OTel Collector (`:4317/:4318`), and Valkey cache.
+  * **Status**: `COMPLETED` (All 15 containers running and healthy).
+
+* **[x] Issue #26: Observability Connectivity & Health Prober**
+  * **Assignee**: `@Dhairya0531`
+  * **Files**: `internal/observability/checker.go`, `internal/observability/checker_test.go`, `internal/observability/checker_integration_test.go`
+  * **Scope**: Implement `CheckObservabilityStack` testing reachability and Prometheus/Jaeger connectivity with structured status reporting.
+  * **Status**: `COMPLETED` (100% tests passing, live integration verified).
+
+* **[x] Issue #27: Core Domain Models & Interface Contracts**
+  * **Assignee**: `@DevKansara97`
+  * **Files**: `internal/experiment/`, `internal/graph/`, `internal/capacity/`, `internal/watcher/`, `internal/safety/`, `internal/events/`, `internal/interfaces/`
+  * **Scope**: Define canonical Go data models, enums, JSON tags, and subsystem interface contracts.
+  * **Status**: `COMPLETED` (100% test coverage across all domain models).
 
 ---
 
-### Phase 4: WatcherEngine & Prometheus Poller
-- [ ] **4.1 PromQL Client Implementation**
-  - [ ] Implement sub-second PromQL query client for request rate (RPS).
-  - [ ] Query P50, P95, and P99 latency percentiles via histogram quantiles.
-  - [ ] Calculate error rate percentage (`5xx` errors / total requests) and availability.
-  - [ ] Scrape CPU and Memory container utilization metrics where available.
-- [ ] **4.2 Streaming Metric Snapshots**
-  - [ ] Stream snapshots through Go channel (`<-chan watcher.MetricSnapshot`).
-  - [ ] Handle Prometheus query timeouts and network resilience.
-  - [ ] Unit & integration tests against mock Prometheus API server.
+### Phase 2: StressEngine (Traffic Generation)
+* **[x] Issue #28: Rate-Regulated Traffic Engine & Cancellation Loop**
+  * **Assignee**: `@drumilbhati`
+  * **Files**: `internal/stress/engine.go`, `internal/stress/engine_test.go`
+  * **Scope**: Implement rate-controlled dispatch loop using `time.Ticker`, `sync.WaitGroup`, single-run mutex guards, and sub-millisecond `<-ctx.Done()` fast-path abort.
+  * **Status**: `COMPLETED` (0 race conditions, 100% tests passing).
+
+* **[x] Issue #29: High-Throughput HTTP Client & Connection Pooling**
+  * **Assignee**: `@Dhairya0531`
+  * **Files**: `internal/stress/client.go`, `internal/stress/client_test.go`
+  * **Scope**: Reusable HTTP transport with 1000 max idle conns, TCP socket keep-alive, per-request deadlines, and response body draining.
+  * **Status**: `COMPLETED` (100% tests passing).
+
+* **[ ] Issue #30: Stepped and Linear Ramp Load Planning**
+  * **Assignee**: `@DevKansara97`
+  * **Files**: `internal/stress/ramp.go`, `internal/stress/ramp_test.go`
+  * **Scope**: Implement step-wise plateaus (`InitialRate` $\rightarrow$ `StepRate` per `StepDuration`) and smooth linear interpolation rate transitions.
+  * **Status**: `PENDING`
 
 ---
 
-### Phase 5: SafetyController & Fast-Path Context Cancellation
-> [!IMPORTANT]
-> Emergency halts execute directly in-memory via `context.CancelFunc()`, guaranteeing sub-millisecond reaction times independent of Kafka or network stability.
+### Phase 3: WatcherEngine (Prometheus Telemetry Poller)
+* **[ ] Issue #31: PromQL RED Metrics Query Client**
+  * **Assignee**: `@VidhanNahar`
+  * **Files**: `internal/watcher/poller.go`, `internal/watcher/poller_test.go`
+  * **Scope**: Sub-second PromQL queries for Request Rate (RPS), Error Rate (5xx percentage), and Latency Percentiles (P50, P95, P99) via histogram quantiles.
+  * **Status**: `PENDING`
 
-- [ ] **5.1 Threshold Evaluation Logic**
-  - [ ] Implement SLA limit checks: P95 latency > `MaxP95LatencyMs`.
-  - [ ] Implement SLA limit checks: Error rate > `MaxErrorRate`.
-  - [ ] Implement SLA limit checks: Availability < `MinAvailability`.
-- [ ] **5.2 Fast-Path Circuit Breaker Wiring**
-  - [ ] Connect `WatcherEngine` $\rightarrow$ `SafetyController` $\rightarrow$ `context.CancelFunc`.
-  - [ ] Benchmark cancellation latency to verify sub-millisecond execution.
-  - [ ] Unit tests with boundary threshold fixtures (normal, threshold-edge, hard-breach).
+* **[ ] Issue #32: Telemetry Snapshot Streaming Channels**
+  * **Assignee**: `@VidhanNahar`
+  * **Files**: `internal/watcher/stream.go`, `internal/watcher/stream_test.go`
+  * **Scope**: Stream periodic `MetricSnapshot` updates via Go channels (`<-chan MetricSnapshot`) with non-blocking buffer management and query timeout resilience.
+  * **Status**: `PENDING`
 
----
-
-### Phase 6: GraphAnalyser & Criticality Scoring Engine
-- [ ] **6.1 Trace Ingestion & Graph Construction**
-  - [ ] Query Jaeger trace API (`/api/traces` and `/api/dependencies`).
-  - [ ] Construct directed `DependencyGraph` with nodes and weighted edges (call counts & frequencies).
-- [ ] **6.2 Criticality Scoring Formula**
-  - [ ] Calculate $\text{InDegree}(v)$, $\text{OutDegree}(v)$, $\text{CallFreq}(v)$, $\text{Depth}(v)$, $\text{SPOF}(v)$.
-  - [ ] Compute weighted normalized score $S(v) \in [0.0, 1.0]$.
-  - [ ] Generate human-readable rationale explanations for each score.
-  - [ ] Unit tests verifying score accuracy against complex multi-tier topologies.
+* **[ ] Issue #33: Container Resource Utilization Scraper**
+  * **Assignee**: `@VidhanNahar`
+  * **Files**: `internal/watcher/system.go`, `internal/watcher/system_test.go`
+  * **Scope**: Query container CPU core utilization and resident memory usage (RSS) from Prometheus cAdvisor metrics.
+  * **Status**: `PENDING`
 
 ---
 
-### Phase 7: ExperimentManager (8-State Orchestrator)
-- [ ] **7.1 State Machine Implementation**
-  - [ ] Implement states: `CREATED` $\rightarrow$ `PLANNED` $\rightarrow$ `RUNNING` $\rightarrow$ `STOPPING` $\rightarrow$ `ANALYZING` $\rightarrow$ `REPORTING` $\rightarrow$ `COMPLETED` (or `ABORTED`).
-  - [ ] Enforce valid state transition matrix and reject invalid jumps.
-- [ ] **7.2 Component Lifecycle Orchestration**
-  - [ ] Initialize execution contexts and wire `StressEngine`, `WatcherEngine`, `SafetyController`.
-  - [ ] Manage post-stress recovery cooldown observation window.
-  - [ ] Unit tests for end-to-end state machine transitions and error recovery.
+### Phase 4: SafetyController (Real-Time Circuit Breaker)
+* **[ ] Issue #34: Multi-Dimensional SLA Threshold Evaluator**
+  * **Assignee**: `@DevKansara97`
+  * **Files**: `internal/safety/evaluator.go`, `internal/safety/evaluator_test.go`
+  * **Scope**: Evaluate live metric snapshots against `SafetyPolicy` (`MaxP95LatencyMs`, `MaxErrorRatePercent`, `MinAvailabilityPercent`), returning `SafetyDecision`.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #35: Fast-Path Context Cancellation Circuit Breaker**
+  * **Assignee**: `@VidhanNahar`
+  * **Files**: `internal/safety/circuit_breaker.go`, `internal/safety/circuit_breaker_test.go`
+  * **Scope**: Wire `WatcherEngine` $\rightarrow$ `SafetyController` $\rightarrow$ `context.CancelFunc()`. Ensure safety trip executes in $< 100\text{ms}$ in-memory without external broker dependencies.
+  * **Status**: `PENDING`
 
 ---
 
-### Phase 8: Kafka Event Backbone
-- [ ] **8.1 Kafka Producer Implementation**
-  - [ ] Setup Kafka producer client using `franz-go` or `sarama`.
-  - [ ] Implement JSON serialization for `DomainEvent` envelopes.
-- [ ] **8.2 Asynchronous Domain Event Streaming**
-  - [ ] Publish state transition events (`EXPERIMENT_STARTED`, `EXPERIMENT_STOPPED`, etc.).
-  - [ ] Publish safety breach events (`SAFETY_STOP_TRIGGERED`) asynchronously.
-  - [ ] Publish metric snapshot feeds to topic `experiment-events`.
-  - [ ] Integration tests verifying event delivery to Kafka brokers.
+### Phase 5: GraphAnalyser (Trace Ingest & Criticality Scoring)
+* **[x] Issue #36: OpenTelemetry Trace Span Ingestion & Graph Builder**
+  * **Assignee**: `@drumilbhati`
+  * **Files**: `internal/graph/analyser.go`, `internal/graph/analyser_test.go`
+  * **Scope**: Ingest distributed spans from Jaeger REST API (`/api/services`, `/api/traces`), resolve cross-service RPC links, and populate `DependencyGraph` adjacency list.
+  * **Status**: `COMPLETED` (89.2% test coverage, query escaping and status validation verified).
+
+* **[ ] Issue #37: Graph Criticality Scoring Algorithm**
+  * **Assignee**: `@Dhairya0531`
+  * **Files**: `internal/graph/scoring.go`, `internal/graph/scoring_test.go`
+  * **Scope**: Implement topological scoring formula $S(v) = w_1 \cdot \text{InDeg} + w_2 \cdot \text{OutDeg} + w_3 \cdot \text{Freq} + w_4 \cdot \text{Depth} + w_5 \cdot \text{SPOF}$.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #38: Criticality Explanation & Bottleneck Rationale Generator**
+  * **Assignee**: `@DevKansara97`
+  * **Files**: `internal/graph/explainer.go`, `internal/graph/explainer_test.go`
+  * **Scope**: Generate human-readable explanations detailing why a service scored high (e.g. single point of failure, deep downstream blast radius).
+  * **Status**: `PENDING`
 
 ---
 
-### Phase 9: PostgreSQL Repository & Persistence
-- [ ] **9.1 DDL Schema & Database Migrations**
-  - [ ] Create migration script `schema.sql` for tables:
-    - [ ] `services` & `dependencies`
-    - [ ] `experiments` & `service_scores`
-    - [ ] `observations` & `safety_events`
-    - [ ] `reports`
-- [ ] **9.2 SQL Repository Layer**
-  - [ ] Implement `PostgresExperimentRepository` with `database/sql` & `pgx`.
-  - [ ] Implement transactions for state updates and bulk observation inserts.
-  - [ ] Integration tests using real or containerized PostgreSQL instance.
+### Phase 6: ExperimentManager (8-State Machine Orchestrator)
+* **[ ] Issue #39: 8-State Finite State Machine**
+  * **Assignee**: `@drumilbhati`
+  * **Files**: `internal/experiment/fsm.go`, `internal/experiment/fsm_test.go`
+  * **Scope**: Implement state lifecycle `CREATED` $\rightarrow$ `PLANNED` $\rightarrow$ `RUNNING` $\rightarrow$ `STOPPING` $\rightarrow$ `ANALYZING` $\rightarrow$ `REPORTING` $\rightarrow$ `COMPLETED` / `ABORTED` with strict transition guards.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #40: Subsystem Wiring & Lifecycle Manager**
+  * **Assignee**: `@Dhairya0531`
+  * **Files**: `internal/experiment/manager.go`, `internal/experiment/manager_test.go`
+  * **Scope**: Orchestrate `StressEngine`, `WatcherEngine`, `SafetyController`, and repository persistence within unified execution context.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #41: Post-Stress Cooldown & Recovery Monitor**
+  * **Assignee**: `@DevKansara97`
+  * **Files**: `internal/experiment/cooldown.go`, `internal/experiment/cooldown_test.go`
+  * **Scope**: Manage stabilization window post-traffic injection to observe metric recovery and calculate true time-to-recover ($T_{\text{recovery}}$).
+  * **Status**: `PENDING`
 
 ---
 
-### Phase 10: CapacityAnalyzer & ReportEngine
-- [ ] **10.1 Capacity Analytics Engine**
-  - [ ] Calculate **Maximum Tested Rate** (highest RPS injected).
-  - [ ] Calculate **Maximum Sustainable Rate** (highest RPS meeting all SLA bounds).
-  - [ ] Detect **Degradation Point** (exact RPS where latency/error inflection occurs).
-  - [ ] Determine **Safety Boundary Rate** (load triggering safety halt).
-  - [ ] Compute **Recovery Time** (seconds taken for metrics to stabilize post-stress).
-- [ ] **10.2 Report Generator**
-  - [ ] Generate structured JSON reports.
-  - [ ] Render self-contained HTML reports with embedded charts.
-  - [ ] Formulate automated optimization recommendations based on bottleneck findings.
+### Phase 7: Kafka Event Backbone
+* **[ ] Issue #42: Kafka Event Producer Client**
+  * **Assignee**: `@drumilbhati`
+  * **Files**: `internal/events/producer.go`, `internal/events/producer_test.go`
+  * **Scope**: Initialize thread-safe Kafka producer using `franz-go` or `sarama` with JSON serialization and retry backoff.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #43: State Transition & Safety Breach Event Publisher**
+  * **Assignee**: `@Dhairya0531`
+  * **Files**: `internal/events/publisher.go`, `internal/events/publisher_test.go`
+  * **Scope**: Publish asynchronous `DomainEvent` envelopes for state transitions (`EXPERIMENT_STARTED`, `EXPERIMENT_STOPPED`, `SAFETY_STOP_TRIGGERED`) to topic `experiment-events`.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #44: Live Metric Telemetry Kafka Streamer**
+  * **Assignee**: `@DevKansara97`
+  * **Files**: `internal/events/streamer.go`, `internal/events/streamer_test.go`
+  * **Scope**: Stream live `MetricSnapshot` objects to Kafka topic `metric-telemetry` for consumption by external dashboards and alerting systems.
+  * **Status**: `PENDING`
 
 ---
 
-### Phase 11: REST API & React Web Dashboard
-- [ ] **11.1 REST API Routes**
-  - [ ] `GET /api/health` — Observability & backend connectivity status.
-  - [ ] `GET /api/dependencies` — Dependency graph & criticality rankings.
-  - [ ] `POST /api/experiments` — Create experiment configuration.
-  - [ ] `POST /api/experiments/{id}/start` — Trigger planned experiment.
-  - [ ] `POST /api/experiments/{id}/stop` — Manual emergency stop.
-  - [ ] `GET /api/experiments` — List historical experiments.
-  - [ ] `GET /api/experiments/{id}` — Get experiment details.
-  - [ ] `GET /api/experiments/{id}/status` — Stream live telemetry snapshot.
-  - [ ] `GET /api/experiments/{id}/report` — Retrieve final report.
-- [ ] **11.2 React / Vite UI Dashboard**
-  - [ ] Interactive dependency graph visualizer (e.g. React Flow or Cytoscape).
-  - [ ] Criticality ranking leaderboard.
-  - [ ] Real-time live metric telemetry graphs (RPS, Latency, Error Rate).
-  - [ ] Capacity and resilience report viewer.
+### Phase 8: PostgreSQL Persistence Layer
+* **[ ] Issue #45: Database Migrations & DDL Schema**
+  * **Assignee**: `@drumilbhati`
+  * **Files**: `internal/storage/schema.sql`, `internal/storage/migrations/`
+  * **Scope**: Define relational tables: `services`, `dependencies`, `experiments`, `service_scores`, `observations`, `safety_events`, and `reports`.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #46: PostgreSQL Experiment Repository**
+  * **Assignee**: `@Dhairya0531`
+  * **Files**: `internal/storage/postgres.go`, `internal/storage/postgres_test.go`
+  * **Scope**: Implement `ExperimentRepository` interface with `database/sql` + `pgx`, connection pooling, and atomic transaction updates.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #47: High-Throughput Bulk Observation Ingestion**
+  * **Assignee**: `@VidhanNahar`
+  * **Files**: `internal/storage/bulk.go`, `internal/storage/bulk_test.go`
+  * **Scope**: Implement batch insertion (`COPY` or multi-row `INSERT`) for time-series metric observations recorded during stress tests.
+  * **Status**: `PENDING`
 
 ---
 
-### Phase 12: Packaging, Kubernetes Deployment & E2E Verification
-- [ ] **12.1 Containerization & Docker Compose**
-  - [ ] Multi-stage `Dockerfile` for DAMASCUS control plane binary.
-  - [ ] Unified `docker-compose.yml` bundling Target Mesh, OTel Collector, Jaeger, Prometheus, PostgreSQL, Kafka, and DAMASCUS.
-- [ ] **12.2 Kubernetes Manifests**
-  - [ ] Deployments, Services, and ConfigMaps for DAMASCUS components.
-- [ ] **12.3 End-to-End Verification Scenarios**
-  - [ ] Scenario A: Nominal stepped load test reaching maximum capacity.
-  - [ ] Scenario B: High-intensity stress triggering sub-second safety stop.
-  - [ ] Scenario C: Dependency degradation analysis and recovery timing verification.
+### Phase 9: CapacityAnalyzer & ReportEngine
+* **[ ] Issue #48: Capacity Curve Knee & Saturation Detector**
+  * **Assignee**: `@drumilbhati`
+  * **Files**: `internal/capacity/analyzer.go`, `internal/capacity/analyzer_test.go`
+  * **Scope**: Analyze $(X, Y)$ throughput vs P95 latency curve to identify maximum sustainable rate, degradation knee point, and safety boundary.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #49: Recovery Time & Blast Radius Calculator**
+  * **Assignee**: `@Dhairya0531`
+  * **Files**: `internal/capacity/recovery.go`, `internal/capacity/recovery_test.go`
+  * **Scope**: Measure time elapsed between stress cutoff and P95 latency returning to $\le 110\%$ of baseline; compute downstream blast radius.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #50: Structured JSON & Self-Contained HTML Report Generator**
+  * **Assignee**: `@DevKansara97`
+  * **Files**: `internal/report/engine.go`, `internal/report/engine_test.go`, `internal/report/templates/`
+  * **Scope**: Generate `ExperimentReport` JSON artifacts and render standalone HTML reports with embedded SVG/HTML5 charts.
+  * **Status**: `PENDING`
+
+---
+
+### Phase 10: REST API & React Web Dashboard
+* **[ ] Issue #51: Control Plane REST API Routing & Handlers**
+  * **Assignee**: `@drumilbhati`
+  * **Files**: `internal/api/router.go`, `internal/api/handlers.go`, `internal/api/api_test.go`
+  * **Scope**: Implement HTTP endpoints (`GET /api/health`, `GET /api/dependencies`, `POST /api/experiments`, `POST /api/experiments/{id}/start`, `POST /api/experiments/{id}/stop`, `GET /api/experiments/{id}/report`).
+  * **Status**: `PENDING`
+
+* **[ ] Issue #52: React / Vite Web Dashboard Scaffolding**
+  * **Assignee**: `@Dhairya0531`
+  * **Files**: `web/package.json`, `web/src/App.tsx`, `web/src/pages/Dashboard.tsx`
+  * **Scope**: Modern React + TypeScript + Tailwind UI scaffold for managing experiments, trigger controls, and status monitoring.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #53: Interactive Microservice Dependency Graph Visualizer**
+  * **Assignee**: `@DevKansara97`
+  * **Files**: `web/src/components/GraphView.tsx`, `web/src/components/CriticalityLeaderboard.tsx`
+  * **Scope**: Render directed microservice topology with node criticality color highlights, edge weights, and failure impact animations.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #54: Real-Time Telemetry Charts & Capacity Report Viewer**
+  * **Assignee**: `@VidhanNahar`
+  * **Files**: `web/src/components/TelemetryView.tsx`, `web/src/components/ReportViewer.tsx`
+  * **Scope**: Real-time live line charts (RPS, Latency P50/P95/P99, Error Rate) and interactive capacity degradation curve viewer.
+  * **Status**: `PENDING`
+
+---
+
+### Phase 11: Packaging, Docker & Kubernetes Deployment
+* **[ ] Issue #55: Multi-Stage Production Dockerfile**
+  * **Assignee**: `@VidhanNahar`
+  * **Files**: `Dockerfile`, `.dockerignore`
+  * **Scope**: Minimal scratch/alpine container image compiling DAMASCUS Go control plane binary.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #56: Unified Production Docker Compose Stack**
+  * **Assignee**: `@VidhanNahar`
+  * **Files**: `docker-compose.yml`
+  * **Scope**: Single-command deployment bundling Target Mesh, OTel Collector, Jaeger, Prometheus, PostgreSQL, Kafka, and DAMASCUS.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #57: Kubernetes Deployment Manifests & Helm Charts**
+  * **Assignee**: `@VidhanNahar`
+  * **Files**: `deployments/k8s/damascus-deployment.yaml`, `deployments/k8s/damascus-service.yaml`, `deployments/k8s/configmap.yaml`
+  * **Scope**: K8s manifests with resource limits, liveness/readiness probes, and horizontal scaling.
+  * **Status**: `PENDING`
+
+---
+
+### Phase 12: End-to-End Verification Scenarios
+* **[ ] Issue #58: Nominal Stepped Load Capacity E2E Scenario**
+  * **Assignee**: `@drumilbhati`
+  * **Files**: `tests/e2e/nominal_capacity_test.go`
+  * **Scope**: Automated E2E test verifying stepped traffic ramping until reaching maximum capacity with valid report generation.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #59: Sub-Second Safety Cutoff & Circuit Breaker E2E Scenario**
+  * **Assignee**: `@Dhairya0531`
+  * **Files**: `tests/e2e/safety_circuit_breaker_test.go`
+  * **Scope**: Automated E2E test injecting extreme traffic, asserting circuit breaker trips in $< 100\text{ms}$ upon threshold breach with 0 leaked goroutines.
+  * **Status**: `PENDING`
+
+* **[ ] Issue #60: Downstream Blast Radius & Recovery Timing E2E Scenario**
+  * **Assignee**: `@DevKansara97`
+  * **Files**: `tests/e2e/recovery_blast_radius_test.go`
+  * **Scope**: Automated E2E test verifying downstream service impact correlation, graph edge highlighting, and recovery timing accuracy.
+  * **Status**: `PENDING`
+
+---
+
+## 📋 Pre-PR Checklist Before Submitting Any Issue
+- [ ] Code strictly follows package conventions (`internal/` for control plane, `services/` for target mesh).
+- [ ] Code builds without errors or warnings (`go build ./...`).
+- [ ] All unit and integration tests pass cleanly with 0 race conditions (`go test -v -race ./...`).
+- [ ] No hardcoded secrets, database credentials, or absolute local paths.
+- [ ] Documented any interface or model updates in [`docs/LLD.md`](./LLD.md).
+- [ ] PR title follows conventional commits format (e.g. `feat(graph): implement trace span ingestion and dependency graph constructor`).
