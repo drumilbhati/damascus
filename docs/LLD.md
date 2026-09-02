@@ -119,12 +119,15 @@ type ServiceScore struct {
 }
 ```
 
-### 2.3 Stress Engine Types
+### 2.3 Stress Engine & Rate Controller Types
 
 ```go
 package stress
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type LoadPlan struct {
 	TargetURL           string `json:"target_url"`
@@ -134,6 +137,19 @@ type LoadPlan struct {
 	StepRate            int    `json:"step_rate"`
 	MaxRate             int    `json:"max_rate"`
 	StepDurationSeconds int    `json:"step_duration_seconds"`
+}
+
+type RateStep struct {
+	StepNumber int           `json:"step_number"`
+	Rate       int           `json:"rate"`
+	Duration   time.Duration `json:"duration"`
+}
+
+type StepHandler func(ctx context.Context, step int, rate int) error
+
+type StepController struct {
+	Plan         LoadPlan
+	StepDuration time.Duration
 }
 
 // ClientConfig holds the tunable parameters for the http.Transport and
