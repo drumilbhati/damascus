@@ -52,6 +52,11 @@ services:
   flagd:
     image: ghcr.io/open-feature/flagd:latest
     container_name: damascus-flagd
+    command: ["start", "--uri", "file:/etc/flagd/demo.flagd.json"]
+    volumes:
+      - ./flagd:/etc/flagd
+    ports:
+      - "8013:8013"
     environment:
       - PORT=8013
       - FLAGD_PORT=8013
