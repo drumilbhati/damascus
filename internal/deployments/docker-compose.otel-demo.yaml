@@ -21,7 +21,7 @@ services:
     image: grafana/grafana:latest
     container_name: damascus-grafana
     environment:
-      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
       - GF_AUTH_ANONYMOUS_ORG_NAME=Main Org.
       - GF_AUTH_DISABLE_LOGIN_FORM=false
@@ -248,5 +248,15 @@ services:
       - LOCUST_USERS=10
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=loadgenerator
+    depends_on:
+      - frontend
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: damascus-tunnel
+    restart: unless-stopped
+    environment:
+      - TUNNEL_TOKEN=eyJhIjoiMDZlZGJjMTQzNTA1ZGFhZmI0ZjY3ODk1ZjlmMmY4ZGIiLCJ0IjoiYzJmN2M2NzMtYjE4My00NzZlLTg0Y2QtMzgzOTA4OTkwZDg2IiwicyI6Ik5UY3pZakl4TVdVdE1tVmpZaTAwTVRNNUxXRmxOMkV0T0dGaE9HRTNaV0kzTkdOaCJ9
+    command: tunnel --no-autoupdate run
     depends_on:
       - frontend

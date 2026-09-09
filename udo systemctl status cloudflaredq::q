@@ -1,0 +1,21 @@
+[0;1;32m●[0m cloudflared.service - Cloudflare Tunnel client
+     Loaded: loaded (]8;;file://omarchy/etc/systemd/system/cloudflared.service\/etc/systemd/system/cloudflared.service]8;;\; [0;1;32menabled[0m; preset: [0;1;38:5:185mdisabled[0m)
+     Active: [0;1;32mactive (running)[0m since Wed 2026-09-09 09:00:30 IST; 19s ago
+ Invocation: b3773be5e61746d48c96236694d71026
+   Main PID: 48800 (cloudflared)
+      Tasks: 14[0;38:5:245m (limit: 19024)[0m
+     Memory: 23.2M (peak: 24.4M)
+        CPU: 296ms
+     CGroup: /system.slice/cloudflared.service
+             └─[0;38:5:245m48800 /usr/local/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run[0m
+
+Sep 09 09:00:35 omarchy cloudflared[48800]: 2026-09-09T03:30:35Z INF |  SUMMARY: Environment is healthy. cloudflared will use 'quic' as primary protocol.  |
+Sep 09 09:00:35 omarchy cloudflared[48800]: 2026-09-09T03:30:35Z INF +-------------------------------------------------------------------------------------+
+Sep 09 09:00:35 omarchy cloudflared[48800]: 2026-09-09T03:30:35Z INF precheck component="DNS Resolution" details="DNS Resolved successfully" run_id=982031ad-d69b-4564-bf70-eb824eb11990 status=pass target=region1.v2.argotunnel.com
+Sep 09 09:00:35 omarchy cloudflared[48800]: 2026-09-09T03:30:35Z INF precheck component="DNS Resolution" details="DNS Resolved successfully" run_id=982031ad-d69b-4564-bf70-eb824eb11990 status=pass target=region2.v2.argotunnel.com
+Sep 09 09:00:35 omarchy cloudflared[48800]: 2026-09-09T03:30:35Z INF precheck component="UDP Connectivity" details="QUIC connection successful" run_id=982031ad-d69b-4564-bf70-eb824eb11990 status=pass target=region1.v2.argotunnel.com
+Sep 09 09:00:35 omarchy cloudflared[48800]: 2026-09-09T03:30:35Z INF precheck component="UDP Connectivity" details="QUIC connection successful" run_id=982031ad-d69b-4564-bf70-eb824eb11990 status=pass target=region2.v2.argotunnel.com
+Sep 09 09:00:35 omarchy cloudflared[48800]: 2026-09-09T03:30:35Z INF precheck component="TCP Connectivity" details="HTTP/2 connection successful" run_id=982031ad-d69b-4564-bf70-eb824eb11990 status=pass target=region1.v2.argotunnel.com
+Sep 09 09:00:35 omarchy cloudflared[48800]: 2026-09-09T03:30:35Z INF precheck component="TCP Connectivity" details="HTTP/2 connection successful" run_id=982031ad-d69b-4564-bf70-eb824eb11990 status=pass target=region2.v2.argotunnel.com
+Sep 09 09:00:35 omarchy cloudflared[48800]: 2026-09-09T03:30:35Z INF precheck component="Cloudflare API" details="API is reachable" run_id=982031ad-d69b-4564-bf70-eb824eb11990 status=pass target=api.cloudflare.com:443
+Sep 09 09:00:35 omarchy cloudflared[48800]: 2026-09-09T03:30:35Z INF precheck complete hard_fail=false run_id=982031ad-d69b-4564-bf70-eb824eb11990 suggested_protocol=quic
