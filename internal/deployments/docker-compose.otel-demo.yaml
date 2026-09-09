@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   # -------------------------------------------------------------
   # 1. Observability Backends & Dashboards
@@ -5,6 +7,7 @@ services:
   jaeger:
     image: jaegertracing/all-in-one:latest
     container_name: damascus-jaeger
+    restart: unless-stopped
     ports:
       - "16686:16686" # Web UI and REST API
       - "4317"        # OTLP gRPC receiver
@@ -12,6 +15,7 @@ services:
   prometheus:
     image: prom/prometheus:latest
     container_name: damascus-prometheus
+    restart: unless-stopped
     volumes:
       - ./prometheus.yaml:/etc/prometheus/prometheus.yml
     ports:
@@ -20,6 +24,7 @@ services:
   grafana:
     image: grafana/grafana:latest
     container_name: damascus-grafana
+    restart: unless-stopped
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
@@ -39,6 +44,7 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.111.0
     container_name: damascus-otel-collector
+    restart: unless-stopped
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     volumes:
       - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml
@@ -52,6 +58,7 @@ services:
   flagd:
     image: ghcr.io/open-feature/flagd:latest
     container_name: damascus-flagd
+    restart: unless-stopped
     command: ["start", "--uri", "file:/etc/flagd/demo.flagd.json"]
     volumes:
       - ./flagd:/etc/flagd
@@ -71,6 +78,7 @@ services:
   frontend:
     image: ghcr.io/open-telemetry/demo:1.11.0-frontend
     container_name: damascus-frontend
+    restart: unless-stopped
     environment:
       - PORT=8080
       - FRONTEND_PORT=8080
@@ -94,6 +102,7 @@ services:
   cartservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-cartservice
     container_name: damascus-cartservice
+    restart: unless-stopped
     environment:
       - PORT=8080
       - CART_SERVICE_PORT=8080
@@ -110,10 +119,12 @@ services:
   valkey-cart:
     image: valkey/valkey:8-alpine
     container_name: damascus-valkey-cart
+    restart: unless-stopped
 
   productcatalogservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-productcatalogservice
     container_name: damascus-productcatalogservice
+    restart: unless-stopped
     environment:
       - PORT=3550
       - PRODUCT_CATALOG_SERVICE_PORT=3550
@@ -128,6 +139,7 @@ services:
   currencyservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-currencyservice
     container_name: damascus-currencyservice
+    restart: unless-stopped
     environment:
       - PORT=7001
       - CURRENCY_SERVICE_PORT=7001
@@ -140,6 +152,7 @@ services:
   paymentservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-paymentservice
     container_name: damascus-paymentservice
+    restart: unless-stopped
     environment:
       - PORT=50051
       - PAYMENT_SERVICE_PORT=50051
@@ -154,6 +167,7 @@ services:
   shippingservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-shippingservice
     container_name: damascus-shippingservice
+    restart: unless-stopped
     environment:
       - PORT=50050
       - SHIPPING_SERVICE_PORT=50050
@@ -167,6 +181,7 @@ services:
   quoteservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-quoteservice
     container_name: damascus-quoteservice
+    restart: unless-stopped
     environment:
       - PORT=8090
       - QUOTE_SERVICE_PORT=8090
@@ -178,6 +193,7 @@ services:
   emailservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-emailservice
     container_name: damascus-emailservice
+    restart: unless-stopped
     environment:
       - PORT=6060
       - EMAIL_SERVICE_PORT=6060
@@ -191,6 +207,7 @@ services:
   checkoutservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-checkoutservice
     container_name: damascus-checkoutservice
+    restart: unless-stopped
     environment:
       - PORT=5050
       - CHECKOUT_SERVICE_PORT=5050
@@ -211,6 +228,7 @@ services:
   recommendationservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-recommendationservice
     container_name: damascus-recommendationservice
+    restart: unless-stopped
     environment:
       - PORT=8080
       - RECOMMENDATION_SERVICE_PORT=8080
@@ -226,6 +244,7 @@ services:
   adservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-adservice
     container_name: damascus-adservice
+    restart: unless-stopped
     environment:
       - PORT=9555
       - AD_SERVICE_PORT=9555
@@ -243,6 +262,7 @@ services:
   loadgenerator:
     image: ghcr.io/open-telemetry/demo:1.11.0-loadgenerator
     container_name: damascus-loadgenerator
+    restart: unless-stopped
     environment:
       - LOCUST_HOST=http://frontend:8080
       - LOCUST_USERS=10
