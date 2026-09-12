@@ -523,6 +523,82 @@ When an SLA breach is evaluated (`ShouldStop: true`), the exact reason string is
 func ApplySafetyDecision(exp *experiment.Experiment, decision SafetyDecision) bool
 ```
 
+### 7.1 WatcherEngine — Loss-of-Observability Detection
+
+`WatcherEngine` (`internal/watcher/evaluator.go`) continuously polls Prometheus for RED metrics and forwards `MetricSnapshot` values to an upstream `SnapshotHandler` callback.
+
+#### Problem
+
+If Prometheus becomes unreachable (network partition, container crash, DNS failure), the polling loop would silently receive errors and stop forwarding snapshots. This means a stress test could continue running **completely unmonitored**, defeating the entire safety mechanism.
+
+#### Solution — Consecutive-Failure Fail-Safe
+
+The engine tracks consecutive Prometheus query failures using an `atomic.Int64` counter. Once the counter reaches `failureThreshold` (default: **3**), it emits a *synthetic breach snapshot* — a `MetricSnapshot` with worst-case sentinel values — to the registered handler, which causes `SafetyController.Evaluate` to issue a `ShouldStop: true` decision and halt the experiment immediately.
+
+#### Tuning Constants
+
+| Constant | Default | Description |
+|---|---|---|
+| `DefaultConsecutiveFailureThreshold` | `3` | Back-to-back Prometheus errors before breach is emitted |
+| `DefaultPollInterval` | `5s` | Cadence of each Prometheus poll cycle |
+| `SyntheticBreachErrorRate` | `1.0` | ErrorRate injected into synthetic snapshots (100 %) |
+| `SyntheticBreachAvailability` | `0.0` | Availability injected into synthetic snapshots (0 %) |
+
+#### Sentinel Snapshot Format
+
+```go
+// Emitted when consecutiveFailures >= failureThreshold
+MetricSnapshot{
+    ExperimentID:  "<running experiment>",
+    TargetService: "<target service>",
+    Timestamp:     time.Now().UTC(),
+    ErrorRate:     1.0,   // guaranteed to breach MaxErrorRate
+    Availability:  0.0,   // guaranteed to breach MinAvailability
+    P95LatencyMs:  0,
+    RequestRate:   0,
+}
+```
+
+The sentinel values guarantee that at least two of the three `SafetyPolicy` checks (`MaxErrorRate`, `MinAvailability`) will fire, leaving a clear audit trail that the stop was caused by observability loss rather than application degradation.
+
+#### Public API
+
+```go
+package watcher
+
+// WatcherEngine polls Prometheus and triggers fail-safe stops on connectivity loss.
+type WatcherEngine struct { /* ... */ }
+
+// NewWatcherEngine constructs a WatcherEngine with functional options.
+func NewWatcherEngine(client *PrometheusClient, handler SnapshotHandler, opts ...WatcherEngineOption) *WatcherEngine
+
+// Start launches the background polling loop (idempotent).
+func (e *WatcherEngine) Start(ctx context.Context, experimentID, targetService string) error
+
+// Stop terminates the polling loop (idempotent).
+func (e *WatcherEngine) Stop()
+
+// ConsecutiveFailures returns the current back-to-back error count (for health checks / tests).
+func (e *WatcherEngine) ConsecutiveFailures() int
+
+// BuildSyntheticBreachSnapshot is an exported helper for constructing sentinel snapshots.
+func BuildSyntheticBreachSnapshot(experimentID, targetService string, consecutiveFailures int, cause error) MetricSnapshot
+
+// Functional options
+func WithPollInterval(d time.Duration) WatcherEngineOption
+func WithConsecutiveFailureThreshold(n int) WatcherEngineOption
+func WithLogger(l *slog.Logger) WatcherEngineOption
+```
+
+#### State Transitions Triggered by Observability Loss
+
+| Condition | Action |
+|---|---|
+| `consecutiveFailures < failureThreshold` | Log warning, continue polling, do **not** forward snapshot |
+| `consecutiveFailures >= failureThreshold` | Log error, emit synthetic breach snapshot to handler |
+| Handler receives synthetic snapshot | `SafetyController.Evaluate` → `ShouldStop: true` → `StateStopping` |
+| First successful query after failures | Reset counter to 0, log "connectivity restored", resume normal forwarding |
+
 ---
 
 ## 8. Kafka Event Backbone & Messaging Schema
