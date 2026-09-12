@@ -224,6 +224,18 @@ type SafetyDecision struct {
 	ShouldStop bool   `json:"should_stop"`
 	Reason     string `json:"reason"`
 }
+
+type SafetyAuditRecord struct {
+	Timestamp      time.Time      `json:"timestamp"`
+	ExperimentID   string         `json:"experiment_id"`
+	TargetService  string         `json:"target_service"`
+	BreachedMetric string         `json:"breached_metric,omitempty"`
+	ObservedValue  float64        `json:"observed_value,omitempty"`
+	ThresholdValue float64        `json:"threshold_value,omitempty"`
+	Reason         string         `json:"reason,omitempty"`
+	Decision       SafetyDecision `json:"decision"`
+	Action         string         `json:"action"`
+}
 ```
 
 ### 2.6 Capacity & Report Types
@@ -462,27 +474,40 @@ Normalized final score: $S(v) \in [0.0, 1.0]$.
 ## 7. Safety Controller & Health Evaluation
 
 ```go
-func (c *SafetyController) Evaluate(snapshot watcher.MetricSnapshot) safety.SafetyDecision {
-	if snapshot.P95LatencyMs > c.policy.MaxP95LatencyMs {
-		return safety.SafetyDecision{
+func (c *Controller) Evaluate(ctx context.Context, snapshot watcher.MetricSnapshot, policy SafetyPolicy) SafetyDecision {
+	if policy.MaxP95LatencyMs > 0 && snapshot.P95LatencyMs > policy.MaxP95LatencyMs {
+		reason := FormatP95Breach(snapshot.P95LatencyMs, policy.MaxP95LatencyMs)
+		c.logAndRecord(snapshot, MetricP95Latency, snapshot.P95LatencyMs, policy.MaxP95LatencyMs, reason, true)
+		return SafetyDecision{
 			ShouldStop: true,
-			Reason:     fmt.Sprintf("P95 latency breached SLA: %.2f ms > %.2f ms", snapshot.P95LatencyMs, c.policy.MaxP95LatencyMs),
+			Reason:     reason,
 		}
 	}
-	if snapshot.ErrorRate > c.policy.MaxErrorRate {
-		return safety.SafetyDecision{
+	if policy.MaxErrorRate > 0 && snapshot.ErrorRate > policy.MaxErrorRate {
+		reason := FormatErrorRateBreach(snapshot.ErrorRate, policy.MaxErrorRate)
+		c.logAndRecord(snapshot, MetricErrorRate, snapshot.ErrorRate, policy.MaxErrorRate, reason, true)
+		return SafetyDecision{
 			ShouldStop: true,
-			Reason:     fmt.Sprintf("Error rate breached SLA: %.2f%% > %.2f%%", snapshot.ErrorRate*100, c.policy.MaxErrorRate*100),
+			Reason:     reason,
 		}
 	}
-	if snapshot.Availability < c.policy.MinAvailability {
-		return safety.SafetyDecision{
+	if policy.MinAvailability > 0 && snapshot.Availability < policy.MinAvailability {
+		reason := FormatAvailabilityBreach(snapshot.Availability, policy.MinAvailability)
+		c.logAndRecord(snapshot, MetricAvail, snapshot.Availability, policy.MinAvailability, reason, true)
+		return SafetyDecision{
 			ShouldStop: true,
-			Reason:     fmt.Sprintf("Availability breached SLA: %.2f%% < %.2f%%", snapshot.Availability*100, c.policy.MinAvailability*100),
+			Reason:     reason,
 		}
 	}
-	return safety.SafetyDecision{ShouldStop: false}
+	c.logAndRecord(snapshot, "", 0, 0, "", false)
+	return SafetyDecision{ShouldStop: false}
 }
+```
+
+When an SLA breach is evaluated (`ShouldStop: true`), the exact reason string is recorded in `Experiment.StopReason` and the experiment state transitions to `StateStopping`:
+
+```go
+func ApplySafetyDecision(exp *experiment.Experiment, decision SafetyDecision) bool
 ```
 
 ---
