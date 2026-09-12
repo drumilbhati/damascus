@@ -30,9 +30,18 @@ type Watcher interface {
 	Stop()
 }
 
-// SafetyController evaluates real-time metric snapshots against SLA thresholds.
+// SafetyController evaluates real-time metric snapshots against SLA thresholds
+// and executes a fast-path context.CancelFunc when a breach is detected.
 type SafetyController interface {
+	// Evaluate inspects a MetricSnapshot against the given policy and returns a
+	// SafetyDecision.  It also records a structured audit entry.
 	Evaluate(ctx context.Context, snapshot watcher.MetricSnapshot, policy safety.SafetyPolicy) safety.SafetyDecision
+
+	// MakeSnapshotHandler returns a watcher.SnapshotHandler that can be
+	// registered directly with WatcherEngine.  The handler evaluates every
+	// incoming snapshot and invokes the experiment context.CancelFunc exactly
+	// once on the first breach, ensuring sub-second emergency stop latency.
+	MakeSnapshotHandler() watcher.SnapshotHandler
 }
 
 // CapacityAnalyzer models the throughput knee and maximum sustainable capacity.
