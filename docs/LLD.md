@@ -431,6 +431,41 @@ stateDiagram-v2
 
 ## 5. Concurrency & Fast-Path Context Cancellation
 
+### 5.1 EvaluatingController — WatcherEngine ↔ SafetyController Wiring
+
+`EvaluatingController` (`internal/safety/controller.go`) is the concrete implementation
+that connects the `WatcherEngine` metric stream directly to `SafetyController` evaluation
+and executes an in-memory `context.CancelFunc` fast path on the first breach.
+
+#### Wire-up (orchestrator responsibility)
+
+```go
+// 1. Create an experiment-scoped cancellable context.
+expCtx, cancel := context.WithCancel(parentCtx)
+
+// 2. Construct the EvaluatingController with the cancel function and SLA policy.
+ec := safety.NewEvaluatingController(policy, cancel, logger)
+
+// 3. Wire the handler into WatcherEngine — no additional plumbing required.
+engine := watcher.NewWatcherEngine(promClient, ec.MakeSnapshotHandler())
+
+// 4. Start both engines. The EvaluatingController will cancel expCtx
+//    automatically on the first breach.
+engine.Start(expCtx, experimentID, targetService)
+stressEngine.Start(expCtx, loadPlan)
+```
+
+#### Cancellation contract
+
+| Guarantee | Mechanism |
+|---|---|
+| Sub-second latency | `cancelFunc()` is called synchronously inside the `SnapshotHandler` callback, before the handler returns to WatcherEngine's poll goroutine |
+| Exactly-once cancel | `sync.Once` wraps the `cancelFunc` call — safe even if two goroutines deliver breach snapshots simultaneously |
+| Audit trail preserved | `Controller.Evaluate` is always called first; the audit log entry is written before cancellation |
+| Nil-safe | `cancelFunc == nil` is checked; no panic if the caller passes a no-op context |
+
+#### Concurrency sequence
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -438,27 +473,29 @@ sequenceDiagram
     participant Ctx as Go context.Context
     participant SE as StressEngine (Workers)
     participant WE as WatcherEngine
-    participant SC as SafetyController
+    participant EC as EvaluatingController
     participant KF as Kafka Producer
 
     EM->>Ctx: context.WithCancel(parentCtx)
+    EM->>EC: NewEvaluatingController(policy, cancel, logger)
+    EM->>WE: NewWatcherEngine(promClient, ec.MakeSnapshotHandler())
     EM->>SE: go SE.Start(ctx, loadPlan)
     EM->>WE: go WE.Start(ctx, expID, targetService)
-    
-    loop Every 1 Second
-        WE->>WE: Query Prometheus (/api/v1/query)
-        WE->>SC: Evaluate(MetricSnapshot)
+
+    loop Every poll interval
+        WE->>WE: QuerySnapshot(ctx, expID, svc)
+        WE->>EC: SnapshotHandler(MetricSnapshot)
+        EC->>EC: Controller.Evaluate(snapshot, policy)
         alt Metrics within bounds
-            SC-->>WE: SafetyDecision{ShouldStop: false}
-        else Threshold Breached (e.g. P95 > 500ms)
-            SC-->>WE: SafetyDecision{ShouldStop: true, Reason: "P95 > 500ms"}
-            Note over WE,EM: FAST-PATH IN-MEMORY CANCELLATION
-            WE->>EM: Trigger cancel callback
-            EM->>Ctx: cancel()
-            Ctx-->>SE: <-ctx.Done() signaled
+            EC-->>WE: return (no-op)
+        else Threshold Breached OR Observability Lost
+            EC->>EC: cancelOnce.Do(cancelFunc)
+            Note over EC,Ctx: FAST-PATH IN-MEMORY CANCELLATION
+            EC->>Ctx: cancel()
+            Ctx-->>SE: ctx.Done() signaled
             SE->>SE: All HTTP worker goroutines abort instantly
-            Ctx-->>WE: <-ctx.Done() signaled
-            WE->>WE: Poller stops load monitoring & switches to recovery mode
+            Ctx-->>WE: ctx.Done() signaled
+            WE->>WE: Poll loop exits
             Note over EM,KF: ASYNC NOTIFICATION (NON-BLOCKING)
             EM->>KF: Publish "SAFETY_STOP_TRIGGERED" event to Kafka
         end
