@@ -207,6 +207,19 @@ type MetricSnapshot struct {
 	CPUUtilization    float64   `json:"cpu_utilization"`
 	MemoryUtilization float64   `json:"memory_utilization"`
 }
+
+// PrometheusClient wraps the Prometheus v1 HTTP API to query real-time RED metrics
+type PrometheusClient struct {
+	api promv1.API
+}
+
+func NewPrometheusClient(address string) (*PrometheusClient, error)
+func (c *PrometheusClient) QuerySnapshot(ctx context.Context, experimentID, targetService string) (MetricSnapshot, error)
+func (c *PrometheusClient) QueryValue(ctx context.Context, query string) (float64, error)
+func BuildP95LatencyQuery(service string) string
+func BuildErrorRateQuery(service string) string
+func BuildRequestRateQuery(service string) string
+func ExtractFloatValue(val model.Value) (float64, error)
 ```
 
 ### 2.5 Safety Types
