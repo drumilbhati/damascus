@@ -31,6 +31,7 @@ type StressEngine interface {
 type Watcher interface {
 	Start(ctx context.Context, experimentID string, targetService string) error
 	Stop()
+	SetSnapshotHandler(handler watcher.SnapshotHandler)
 }
 
 type SafetyController interface {
@@ -45,7 +46,7 @@ type ReportEngine interface {
 	Generate(exp Experiment, capResult capacity.CapacityResult, scores []graph.ServiceScore, observations []capacity.Observation) (*capacity.ExperimentReport, error)
 }
 
-type Repository interface {
+type ExperimentRepository interface {
 	Create(ctx context.Context, exp *Experiment) error
 	GetByID(ctx context.Context, id string) (*Experiment, error)
 	List(ctx context.Context) ([]Experiment, error)
@@ -63,13 +64,13 @@ type Manager struct {
 	safetyController SafetyController
 	capacityAnalyzer CapacityAnalyzer
 	reportEngine     ReportEngine
-	repo             Repository
+	repo             ExperimentRepository
 
 	mu         sync.RWMutex
 	activeRuns map[string]context.CancelFunc
 }
 
-func NewManager(graphAnalyzer GraphAnalyzer, stressEngine StressEngine, watcher Watcher, safetyController SafetyController, capacityAnalyzer CapacityAnalyzer, reportEngine ReportEngine, repo Repository) *Manager {
+func NewManager(graphAnalyzer GraphAnalyzer, stressEngine StressEngine, watcher Watcher, safetyController SafetyController, capacityAnalyzer CapacityAnalyzer, reportEngine ReportEngine, repo ExperimentRepository) *Manager {
 	return &Manager{
 		graphAnalyzer:    graphAnalyzer,
 		stressEngine:     stressEngine,
@@ -163,11 +164,52 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 		return fmt.Errorf("failed to transition experiment %s to StateRunning: %w", id, err)
 	}
 
-	startErrs := make(chan error, 2)
+	policy := safety.SafetyPolicy{
+		MaxP95LatencyMs: exp.Config.MaxP95LatencyMs,
+		MaxErrorRate:    exp.Config.MaxErrorRatePercent / 100,
+		MinAvailability: exp.Config.MinAvailabilityPct / 100,
+	}
+	startErrs := make(chan error, 1)
+	var failureOnce sync.Once
+	signalFailure := func(err error) {
+		failureOnce.Do(func() {
+			startErrs <- err
+			cancel()
+		})
+	}
+	var stopOnce sync.Once
+	handler := func(snapshot watcher.MetricSnapshot) {
+		observation := capacity.Observation{
+			Timestamp:    snapshot.Timestamp,
+			LoadRate:     snapshot.RequestRate,
+			P95LatencyMs: snapshot.P95LatencyMs,
+			ErrorRate:    snapshot.ErrorRate,
+			Availability: snapshot.Availability,
+		}
+		if err := m.repo.SaveObservation(runCtx, id, observation); err != nil {
+			signalFailure(fmt.Errorf("failed to save observation: %w", err))
+			return
+		}
+		if m.safetyController == nil {
+			signalFailure(errors.New("safety controller is nil"))
+			return
+		}
+		decision := m.safetyController.Evaluate(runCtx, snapshot, policy)
+		if decision.ShouldStop {
+			stopOnce.Do(cancel)
+		}
+	}
+	if m.watcher == nil {
+		cancel()
+		m.removeActiveRun(id)
+		_ = m.repo.UpdateState(ctx, id, StateAborted, "watcher is nil")
+		return errors.New("watcher is nil")
+	}
+	m.watcher.SetSnapshotHandler(handler)
 	if m.watcher != nil {
 		go func() {
 			if err := m.watcher.Start(runCtx, id, exp.TargetService); err != nil {
-				startErrs <- fmt.Errorf("watcher failed: %w", err)
+				signalFailure(fmt.Errorf("watcher failed: %w", err))
 			}
 		}()
 	}
@@ -179,7 +221,7 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 	}
 	go func() {
 		if err := m.stressEngine.Start(runCtx, plan); err != nil && !errors.Is(err, context.Canceled) {
-			startErrs <- fmt.Errorf("stress engine failed: %w", err)
+			signalFailure(fmt.Errorf("stress engine failed: %w", err))
 		}
 	}()
 
@@ -227,7 +269,14 @@ func (m *Manager) finishExperiment(runCtx context.Context, cancel context.Cancel
 	case err := <-startErrs:
 		stopReason = err.Error()
 		cancel()
-	case <-runCtx.Done():
+	default:
+		select {
+		case err := <-startErrs:
+			stopReason = err.Error()
+			cancel()
+		case <-runCtx.Done():
+			// The run was stopped normally, manually, or by the safety controller.
+		}
 	}
 
 	if m.watcher != nil {
