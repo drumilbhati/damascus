@@ -220,6 +220,31 @@ func BuildP95LatencyQuery(service string) string
 func BuildErrorRateQuery(service string) string
 func BuildRequestRateQuery(service string) string
 func ExtractFloatValue(val model.Value) (float64, error)
+
+// SnapshotQuerier defines the interface for querying RED metric snapshots
+type SnapshotQuerier interface {
+	QuerySnapshot(ctx context.Context, experimentID, targetService string) (MetricSnapshot, error)
+}
+
+// Watcher polls Prometheus periodically (default: 1s) and streams MetricSnapshot over Go channels
+type Watcher struct {
+	// unexported fields
+}
+
+func NewWatcher(client SnapshotQuerier, opts ...WatcherOption) *Watcher
+func (w *Watcher) Start(ctx context.Context, expID string, targetService string) (<-chan MetricSnapshot, error)
+func (w *Watcher) Stop()
+func (w *Watcher) Running() bool
+func (w *Watcher) ConsecutiveFailures() int
+
+// Functional Options for Watcher
+func WithWatcherPollInterval(d time.Duration) WatcherOption
+func WithWatcherBufferSize(size int) WatcherOption
+func WithBufferSize(size int) WatcherOption
+func WithWatcherFailureThreshold(threshold int) WatcherOption
+func WithWatcherLogger(l *slog.Logger) WatcherOption
+func WithWatcherDropOnFull(drop bool) WatcherOption
+func WithWatcherImmediatePoll(immediate bool) WatcherOption
 ```
 
 ### 2.5 Safety Types
@@ -354,6 +379,12 @@ type Watcher interface {
 	Start(ctx context.Context, experimentID string, targetService string) error
 	Stop()
 	SetSnapshotHandler(handler watcher.SnapshotHandler)
+}
+
+// MetricStreamer periodically queries Prometheus and streams metric snapshots over a Go channel
+type MetricStreamer interface {
+	Start(ctx context.Context, expID string, targetService string) (<-chan watcher.MetricSnapshot, error)
+	Stop()
 }
 
 // SafetyController checks metric snapshots against SLA boundaries
@@ -699,6 +730,26 @@ func WithLogger(l *slog.Logger) WatcherEngineOption
 | `consecutiveFailures >= failureThreshold` | Log error, emit synthetic breach snapshot to handler |
 | Handler receives synthetic snapshot | `SafetyController.Evaluate` → `ShouldStop: true` → `StateStopping` |
 | First successful query after failures | Reset counter to 0, log "connectivity restored", resume normal forwarding |
+
+### 7.2 Watcher — Periodic Metric Polling & Go Channel Streaming
+
+`Watcher` (`internal/watcher/watcher.go`) runs a dedicated background poller goroutine that periodically queries Prometheus for RED metrics (default interval: **1 second**) and streams `MetricSnapshot` structures across a read-only Go channel (`<-chan MetricSnapshot`).
+
+#### Core Design & Concurrency Model
+
+- **Read-Only Streaming Channel**: `Start(ctx context.Context, expID string, targetService string) (<-chan watcher.MetricSnapshot, error)` initializes the poller loop and returns a read-only channel to the caller.
+- **Graceful Lifecycle Management**: The poller loop terminates cleanly when `ctx` is cancelled or `Stop()` is called. On termination, the internal goroutine finishes all in-flight work and closes the output channel (`close(out)`), allowing consumer loops (`for snap := range ch`) to terminate naturally.
+- **Non-Blocking Buffer Management**: By default, snapshots are placed into a buffered channel (default capacity: **100**). If downstream consumers stall and the buffer fills, incoming snapshots are dropped with structured warnings (`dropOnFull: true`), preventing poller goroutine deadlocks or uncontrolled memory expansion.
+- **Loss-of-Observability Sentinel Stream**: If Prometheus becomes unreachable and consecutive errors reach `failureThreshold` (default: **3**), `Watcher` constructs and streams synthetic breach snapshots (`ErrorRate: 1.0`, `Availability: 0.0`) down the channel, ensuring real-time subscribers immediately detect telemetry loss.
+- **Idempotency & Reusability**: Calling `Start()` on an active poller returns an error; calling `Stop()` is safe and idempotent. A stopped `Watcher` can be restarted with a new context and parameters.
+
+#### Tuning Constants
+
+| Constant | Default | Description |
+|---|---|---|
+| `DefaultWatcherPollInterval` | `1s` | Default polling interval cadence |
+| `DefaultWatcherBufferSize` | `100` | Default channel buffer capacity |
+| `DefaultConsecutiveFailureThreshold` | `3` | Back-to-back Prometheus errors before synthetic breach |
 
 ---
 
