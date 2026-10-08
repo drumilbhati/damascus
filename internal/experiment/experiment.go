@@ -47,6 +47,12 @@ func (c ExperimentConfig) Validate() error {
 	if c.MaxRate < c.InitialRate {
 		return fmt.Errorf("max_rate (%d) cannot be less than initial_rate (%d)", c.MaxRate, c.InitialRate)
 	}
+	if c.StepRate < 0 {
+		return fmt.Errorf("step_rate cannot be negative")
+	}
+	if c.StepRate == 0 && c.MaxRate > c.InitialRate {
+		return fmt.Errorf("step_rate must be greater than 0 when max_rate exceeds initial_rate")
+	}
 	if c.StepDurationSeconds <= 0 {
 		return fmt.Errorf("step_duration_seconds must be greater than 0")
 	}
@@ -55,6 +61,12 @@ func (c ExperimentConfig) Validate() error {
 	}
 	if c.MaxErrorRatePercent < 0 || c.MaxErrorRatePercent > 100 {
 		return fmt.Errorf("max_error_rate_percent must be between 0 and 100")
+	}
+	if c.MinAvailabilityPct < 0 || c.MinAvailabilityPct > 100 {
+		return fmt.Errorf("min_availability_pct must be between 0 and 100")
+	}
+	if c.RecoveryWindowSec < 0 {
+		return fmt.Errorf("recovery_window_sec cannot be negative")
 	}
 	return nil
 }
@@ -76,4 +88,19 @@ type Experiment struct {
 // IsTerminal returns true if the experiment has completed or aborted.
 func (e *Experiment) IsTerminal() bool {
 	return e.State == StateCompleted || e.State == StateAborted
+}
+
+// SetStopReason records why the experiment was stopped.
+func (e *Experiment) SetStopReason(reason string) {
+	e.StopReason = reason
+}
+
+// SetStateStopping transitions the experiment into the stopping state.
+func (e *Experiment) SetStateStopping() {
+	e.State = StateStopping
+}
+
+// IsRunning reports whether the experiment is currently executing.
+func (e *Experiment) IsRunning() bool {
+	return e.State == StateRunning
 }

@@ -7,9 +7,15 @@ import (
 	"sync"
 	"time"
 
-	"damascus/internal/experiment"
 	"damascus/internal/watcher"
 )
+
+// TargetExperiment abstracts the experiment state fields required by ApplySafetyDecision.
+type TargetExperiment interface {
+	SetStopReason(reason string)
+	SetStateStopping()
+	IsRunning() bool
+}
 
 // Metric names monitored during experiment execution.
 const (
@@ -168,11 +174,11 @@ func (c *Controller) ClearAuditHistory() {
 // ApplySafetyDecision updates an experiment's StopReason and transitions its state
 // if the decision indicates that execution must halt.
 // It returns true if a stop was applied, false otherwise.
-func ApplySafetyDecision(exp *experiment.Experiment, decision SafetyDecision) bool {
+func ApplySafetyDecision(exp TargetExperiment, decision SafetyDecision) bool {
 	if decision.ShouldStop {
-		exp.StopReason = decision.Reason
-		if exp.State == experiment.StateRunning {
-			exp.State = experiment.StateStopping
+		exp.SetStopReason(decision.Reason)
+		if exp.IsRunning() {
+			exp.SetStateStopping()
 		}
 		return true
 	}

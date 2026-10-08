@@ -6,14 +6,11 @@ import (
 	"time"
 
 	"damascus/internal/experiment"
-	"damascus/internal/interfaces"
 	"damascus/internal/safety"
 	"damascus/internal/watcher"
 )
 
-// EvaluatingController must satisfy the full SafetyController interface,
-// including the MakeSnapshotHandler method added in this PR.
-var _ interfaces.SafetyController = (*safety.EvaluatingController)(nil)
+var _ experiment.SafetyController = (*safety.EvaluatingController)(nil)
 
 func TestFormatP95Breach(t *testing.T) {
 	got := safety.FormatP95Breach(620.5, 500.0)

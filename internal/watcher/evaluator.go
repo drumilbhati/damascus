@@ -106,6 +106,15 @@ func NewWatcherEngine(client *PrometheusClient, handler SnapshotHandler, opts ..
 	return e
 }
 
+// SetSnapshotHandler replaces the callback invoked for subsequent snapshots.
+// It is intended for experiment-scoped orchestration, where the manager creates
+// the cancellation context and must wire safety evaluation and persistence to it.
+func (e *WatcherEngine) SetSnapshotHandler(handler SnapshotHandler) {
+	e.mu.Lock()
+	e.handler = handler
+	e.mu.Unlock()
+}
+
 // Start launches the background polling loop.  It is idempotent: calling Start
 // on an already-running engine is a no-op.
 //
@@ -200,8 +209,11 @@ func (e *WatcherEngine) poll(ctx context.Context, experimentID, targetService st
 		)
 	}
 
-	if e.handler != nil {
-		e.handler(snapshot)
+	e.mu.Lock()
+	handler := e.handler
+	e.mu.Unlock()
+	if handler != nil {
+		handler(snapshot)
 	}
 }
 
@@ -246,8 +258,11 @@ func (e *WatcherEngine) emitSyntheticBreach(experimentID, targetService string, 
 		slog.String("reason", reason),
 	)
 
-	if e.handler != nil {
-		e.handler(synthetic)
+	e.mu.Lock()
+	handler := e.handler
+	e.mu.Unlock()
+	if handler != nil {
+		handler(synthetic)
 	}
 }
 

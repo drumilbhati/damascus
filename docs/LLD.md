@@ -335,7 +335,7 @@ import (
 
 // GraphAnalyzer extracts traces from Jaeger / OTel and ranks service criticality
 type GraphAnalyzer interface {
-	BuildGraph(ctx context.Context, lookbackDuration string) (*graph.DependencyGraph, error)
+	BuildGraph(ctx context.Context, lookbackDuration int64) (*graph.DependencyGraph, error)
 	ScoreCriticality(g *graph.DependencyGraph) []graph.ServiceScore
 }
 
@@ -351,13 +351,14 @@ type StressEngine interface {
 
 // Watcher polls Prometheus metrics in real-time
 type Watcher interface {
-	Start(ctx context.Context, experimentID string, targetService string) (<-chan watcher.MetricSnapshot, error)
+	Start(ctx context.Context, experimentID string, targetService string) error
 	Stop()
+	SetSnapshotHandler(handler watcher.SnapshotHandler)
 }
 
 // SafetyController checks metric snapshots against SLA boundaries
 type SafetyController interface {
-	Evaluate(snapshot watcher.MetricSnapshot) safety.SafetyDecision
+	Evaluate(ctx context.Context, snapshot watcher.MetricSnapshot, policy safety.SafetyPolicy) safety.SafetyDecision
 }
 
 // CapacityAnalyzer computes sustainable throughput and recovery metrics
@@ -372,7 +373,7 @@ type ReportEngine interface {
 		capResult capacity.CapacityResult,
 		scores []graph.ServiceScore,
 		observations []capacity.Observation,
-	) (capacity.ExperimentReport, error)
+	) (*capacity.ExperimentReport, error)
 }
 
 // ExperimentRepository persists lifecycle states, observations, and reports
@@ -383,7 +384,7 @@ type ExperimentRepository interface {
 	UpdateState(ctx context.Context, id string, state experiment.ExperimentState, stopReason string) error
 	SaveObservation(ctx context.Context, expID string, obs capacity.Observation) error
 	GetObservations(ctx context.Context, expID string) ([]capacity.Observation, error)
-	SaveReport(ctx context.Context, report capacity.ExperimentReport) error
+	SaveReport(ctx context.Context, report *capacity.ExperimentReport) error
 	GetReport(ctx context.Context, expID string) (*capacity.ExperimentReport, error)
 }
 
@@ -393,6 +394,21 @@ type EventProducer interface {
 	Close() error
 }
 ```
+
+The `ExperimentManager` accepts the caller's traffic plan when starting an experiment:
+
+```go
+func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.LoadPlan) error
+```
+
+Traffic settings belong to `stress.LoadPlan`; safety thresholds and recovery settings
+remain part of `experiment.ExperimentConfig`.
+
+During execution, `ExperimentManager` installs a snapshot handler on the watcher. Each
+snapshot is persisted as a `capacity.Observation`, evaluated by `SafetyController`, and
+a safety breach cancels the shared stress/watcher context. After cancellation, the
+manager waits for the configured recovery window, analyzes the persisted observations,
+generates the report, saves it, and completes the experiment.
 
 ---
 

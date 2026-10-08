@@ -18,6 +18,7 @@ type WorkerPool struct {
 	workCh         chan func() // Buffered channel for submitted tasks
 	ctx            context.Context
 	cancel         context.CancelFunc
+	mu             sync.RWMutex
 }
 
 // NewWorkerPool creates a new worker pool with specified concurrency and rate limits.
@@ -41,31 +42,41 @@ func (wp *WorkerPool) Start(ctx context.Context) error {
 		ctx = context.Background()
 	}
 
+	wp.mu.Lock()
+	if wp.ctx != nil {
+		wp.mu.Unlock()
+		return fmt.Errorf("worker pool is already running")
+	}
+
 	// Calculate tick interval: rate-limit based on targetRate.
 	tickInterval := time.Second / time.Duration(wp.targetRate)
 	if tickInterval <= 0 {
+		wp.mu.Unlock()
 		return fmt.Errorf("computed ticker interval must be positive, got %v", tickInterval)
 	}
 
 	wp.ctx, wp.cancel = context.WithCancel(ctx)
 	wp.ticker = time.NewTicker(tickInterval)
+	workerCtx := wp.ctx
+	workerTicker := wp.ticker
+	wp.wg.Add(wp.maxConcurrency)
+	wp.mu.Unlock()
 
 	// Start worker goroutines (respecting maxConcurrency)
 	for i := 0; i < wp.maxConcurrency; i++ {
-		wp.wg.Add(1)
-		go wp.worker()
+		go wp.worker(workerCtx, workerTicker)
 	}
 
 	return nil
 }
 
 // worker processes tasks from the work channel.
-func (wp *WorkerPool) worker() {
+func (wp *WorkerPool) worker(ctx context.Context, ticker *time.Ticker) {
 	defer wp.wg.Done()
 
 	for {
 		select {
-		case <-wp.ctx.Done():
+		case <-ctx.Done():
 			return
 		case task := <-wp.workCh:
 			if task == nil {
@@ -73,9 +84,9 @@ func (wp *WorkerPool) worker() {
 			}
 
 			select {
-			case <-wp.ctx.Done():
+			case <-ctx.Done():
 				return
-			case <-wp.ticker.C:
+			case <-ticker.C:
 				task()
 			}
 		}
@@ -87,14 +98,18 @@ func (wp *WorkerPool) Submit(task func()) error {
 	if task == nil {
 		return fmt.Errorf("task cannot be nil")
 	}
-	if wp.ctx == nil {
+	wp.mu.RLock()
+	ctx := wp.ctx
+	workCh := wp.workCh
+	wp.mu.RUnlock()
+	if ctx == nil {
 		return fmt.Errorf("worker pool has not been started")
 	}
 
 	select {
-	case <-wp.ctx.Done():
+	case <-ctx.Done():
 		return fmt.Errorf("worker pool is shutting down")
-	case wp.workCh <- task:
+	case workCh <- task:
 		return nil
 	default:
 		return fmt.Errorf("worker pool queue full, max concurrency reached")
@@ -103,11 +118,18 @@ func (wp *WorkerPool) Submit(task func()) error {
 
 // Stop gracefully shuts down all workers and cleanup.
 func (wp *WorkerPool) Stop() {
-	if wp.cancel != nil {
-		wp.cancel()
+	wp.mu.Lock()
+	cancel := wp.cancel
+	ticker := wp.ticker
+	wp.cancel = nil
+	wp.ticker = nil
+	wp.ctx = nil
+	wp.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
-	if wp.ticker != nil {
-		wp.ticker.Stop()
+	if ticker != nil {
+		ticker.Stop()
 	}
 	wp.wg.Wait()
 }
