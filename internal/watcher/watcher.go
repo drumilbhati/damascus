@@ -83,6 +83,19 @@ func WithWatcherImmediatePoll(immediate bool) WatcherOption {
 	}
 }
 
+type watcherState int
+
+const (
+	stateStopped watcherState = iota
+	stateRunning
+	stateStopping
+)
+
+type activeRun struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
 // Watcher periodically polls Prometheus for RED metrics and streams
 // MetricSnapshot instances across a read-only Go channel.
 type Watcher struct {
@@ -95,10 +108,9 @@ type Watcher struct {
 	immediatePoll       bool
 	consecutiveFailures atomic.Int64
 
-	mu      sync.Mutex
-	running bool
-	cancel  context.CancelFunc
-	done    chan struct{}
+	mu         sync.Mutex
+	state      watcherState
+	currentRun *activeRun
 }
 
 // NewWatcher initializes a Watcher instance with the given Prometheus client/querier and options.
@@ -111,6 +123,7 @@ func NewWatcher(client SnapshotQuerier, opts ...WatcherOption) *Watcher {
 		logger:           slog.Default(),
 		dropOnFull:       true,
 		immediatePoll:    false,
+		state:            stateStopped,
 	}
 	for _, opt := range opts {
 		opt(w)
@@ -144,21 +157,24 @@ func (w *Watcher) Start(ctx context.Context, expID string, targetService string)
 	}
 
 	w.mu.Lock()
-	if w.running {
+	if w.state != stateStopped || w.currentRun != nil {
 		w.mu.Unlock()
 		return nil, errors.New("watcher is already running")
 	}
-	w.running = true
+
 	loopCtx, cancel := context.WithCancel(ctx)
-	w.cancel = cancel
-	done := make(chan struct{})
-	w.done = done
+	run := &activeRun{
+		cancel: cancel,
+		done:   make(chan struct{}),
+	}
+	w.currentRun = run
+	w.state = stateRunning
 	w.consecutiveFailures.Store(0)
 
 	out := make(chan MetricSnapshot, w.bufferSize)
 	w.mu.Unlock()
 
-	go w.pollLoop(loopCtx, expID, targetService, out, done)
+	go w.pollLoop(loopCtx, expID, targetService, out, run)
 
 	return out, nil
 }
@@ -167,34 +183,35 @@ func (w *Watcher) Start(ctx context.Context, expID string, targetService string)
 // and the snapshot channel is closed. Calling Stop on an inactive watcher is a safe no-op.
 func (w *Watcher) Stop() {
 	w.mu.Lock()
-	if !w.running {
-		done := w.done
+	if w.state == stateStopped || w.currentRun == nil {
 		w.mu.Unlock()
-		if done != nil {
-			<-done
-		}
 		return
 	}
 
-	cancel := w.cancel
-	done := w.done
-	w.running = false
-	w.cancel = nil
+	run := w.currentRun
+	if w.state == stateStopping {
+		// Another goroutine is already stopping this active run.
+		w.mu.Unlock()
+		<-run.done
+		return
+	}
+
+	w.state = stateStopping
+	cancel := run.cancel
+	done := run.done
 	w.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
 	}
-	if done != nil {
-		<-done
-	}
+	<-done
 }
 
 // Running reports whether the watcher is currently running an active polling loop.
 func (w *Watcher) Running() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.running
+	return w.state == stateRunning
 }
 
 // ConsecutiveFailures returns the current number of back-to-back Prometheus query errors.
@@ -203,14 +220,16 @@ func (w *Watcher) ConsecutiveFailures() int {
 }
 
 // pollLoop drives the periodic polling ticker and gracefully tears down when finished.
-func (w *Watcher) pollLoop(ctx context.Context, expID, targetService string, out chan MetricSnapshot, done chan struct{}) {
+func (w *Watcher) pollLoop(ctx context.Context, expID, targetService string, out chan MetricSnapshot, run *activeRun) {
 	defer func() {
 		close(out)
 		w.mu.Lock()
-		w.running = false
-		w.cancel = nil
+		if w.currentRun == run {
+			w.currentRun = nil
+			w.state = stateStopped
+		}
 		w.mu.Unlock()
-		close(done)
+		close(run.done)
 		w.logger.Info("watcher poller stopped",
 			slog.String("experiment_id", expID),
 			slog.String("target_service", targetService),

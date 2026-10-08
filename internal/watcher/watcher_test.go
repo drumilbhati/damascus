@@ -523,3 +523,46 @@ func TestWatcher_CanRestartAfterStop(t *testing.T) {
 		t.Fatal("expected watcher not running after second stop")
 	}
 }
+
+func TestWatcher_ConcurrentStopAndRestart(t *testing.T) {
+	mock := &customMockQuerier{}
+	w := watcher.NewWatcher(mock, watcher.WithWatcherPollInterval(5*time.Millisecond))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for cycle := 0; cycle < 20; cycle++ {
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			w.Stop()
+		}()
+
+		go func() {
+			defer wg.Done()
+			_, _ = w.Start(ctx, "exp-concurrent", "service")
+		}()
+
+		wg.Wait()
+	}
+
+	// Final stop must cleanly terminate and not block indefinitely
+	done := make(chan struct{})
+	go func() {
+		w.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Stopped cleanly without blocking
+	case <-time.After(1 * time.Second):
+		t.Fatal("Stop() blocked indefinitely after concurrent stop and restart")
+	}
+
+	if w.Running() {
+		t.Error("expected watcher not running after final Stop()")
+	}
+}
