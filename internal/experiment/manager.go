@@ -66,11 +66,14 @@ type Manager struct {
 	reportEngine     ReportEngine
 	repo             ExperimentRepository
 
-	mu         sync.RWMutex
-	activeRuns map[string]context.CancelFunc
+	mu             sync.RWMutex
+	activeRuns     map[string]context.CancelFunc
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
 }
 
 func NewManager(graphAnalyzer GraphAnalyzer, stressEngine StressEngine, watcher Watcher, safetyController SafetyController, capacityAnalyzer CapacityAnalyzer, reportEngine ReportEngine, repo ExperimentRepository) *Manager {
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 	return &Manager{
 		graphAnalyzer:    graphAnalyzer,
 		stressEngine:     stressEngine,
@@ -80,6 +83,22 @@ func NewManager(graphAnalyzer GraphAnalyzer, stressEngine StressEngine, watcher 
 		reportEngine:     reportEngine,
 		repo:             repo,
 		activeRuns:       make(map[string]context.CancelFunc),
+		shutdownCtx:      shutdownCtx,
+		shutdownCancel:   shutdownCancel,
+	}
+}
+
+// Shutdown stops all active experiments and interrupts recovery waits.
+func (m *Manager) Shutdown() {
+	m.shutdownCancel()
+	m.mu.RLock()
+	cancels := make([]context.CancelFunc, 0, len(m.activeRuns))
+	for _, cancel := range m.activeRuns {
+		cancels = append(cancels, cancel)
+	}
+	m.mu.RUnlock()
+	for _, cancel := range cancels {
+		cancel()
 	}
 }
 
@@ -147,6 +166,14 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 		}
 		scores = m.graphAnalyzer.ScoreCriticality(dependencyGraph)
 	}
+	if m.stressEngine == nil {
+		_ = m.repo.UpdateState(ctx, id, StateAborted, "stress engine is nil")
+		return errors.New("stress engine is nil")
+	}
+	if m.watcher == nil {
+		_ = m.repo.UpdateState(ctx, id, StateAborted, "watcher is nil")
+		return errors.New("watcher is nil")
+	}
 
 	runCtx, cancel := context.WithCancel(ctx)
 	m.mu.Lock()
@@ -199,30 +226,20 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 			stopOnce.Do(cancel)
 		}
 	}
-	if m.watcher == nil {
-		cancel()
-		m.removeActiveRun(id)
-		_ = m.repo.UpdateState(ctx, id, StateAborted, "watcher is nil")
-		return errors.New("watcher is nil")
-	}
 	m.watcher.SetSnapshotHandler(handler)
-	if m.watcher != nil {
-		go func() {
-			if err := m.watcher.Start(runCtx, id, exp.TargetService); err != nil {
-				signalFailure(fmt.Errorf("watcher failed: %w", err))
-			}
-		}()
-	}
-	if m.stressEngine == nil {
-		cancel()
-		m.removeActiveRun(id)
-		_ = m.repo.UpdateState(ctx, id, StateAborted, "stress engine is nil")
-		return errors.New("stress engine is nil")
-	}
 	go func() {
-		if err := m.stressEngine.Start(runCtx, plan); err != nil && !errors.Is(err, context.Canceled) {
-			signalFailure(fmt.Errorf("stress engine failed: %w", err))
+		if err := m.watcher.Start(runCtx, id, exp.TargetService); err != nil {
+			signalFailure(fmt.Errorf("watcher failed: %w", err))
 		}
+	}()
+	go func() {
+		if err := m.stressEngine.Start(runCtx, plan); err != nil {
+			if !errors.Is(err, context.Canceled) {
+				signalFailure(fmt.Errorf("stress engine failed: %w", err))
+			}
+			return
+		}
+		cancel()
 	}()
 
 	go m.finishExperiment(runCtx, cancel, startErrs, *exp, scores)
@@ -305,7 +322,13 @@ func (m *Manager) finishExperiment(runCtx context.Context, cancel context.Cancel
 	}
 	if exp.Config.RecoveryWindowSec > 0 {
 		timer := time.NewTimer(time.Duration(exp.Config.RecoveryWindowSec) * time.Second)
-		<-timer.C
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-m.shutdownCtx.Done():
+			m.abortExperiment(workCtx, exp.ID, "manager shutdown")
+			return
+		}
 	}
 	if err := m.repo.UpdateState(workCtx, exp.ID, StateAnalyzing, ""); err != nil {
 		m.abortExperiment(workCtx, exp.ID, err.Error())

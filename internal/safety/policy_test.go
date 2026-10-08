@@ -10,6 +10,8 @@ import (
 	"damascus/internal/watcher"
 )
 
+var _ experiment.SafetyController = (*safety.EvaluatingController)(nil)
+
 func TestFormatP95Breach(t *testing.T) {
 	got := safety.FormatP95Breach(620.5, 500.0)
 	want := "P95 latency breached SLA: 620.50 ms > 500.00 ms"
