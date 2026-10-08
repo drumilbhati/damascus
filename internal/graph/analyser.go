@@ -149,7 +149,7 @@ func (a *Analyzer) BuildGraph(ctx context.Context, lookbackDuration int64) (*Dep
 	return graph, nil
 }
 
-// ScoreCriticality will be implemented in Phase 7.2.
+// ScoreCriticality calculates weighted criticality scores and diagnostic explanations for services in the graph.
 func (a *Analyzer) ScoreCriticality(g *DependencyGraph) []ServiceScore {
-	return nil
+	return ScoreCriticality(g)
 }
