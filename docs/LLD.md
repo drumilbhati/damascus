@@ -535,6 +535,54 @@ $$S(v) = w_1 \cdot \text{InDegree}(v) + w_2 \cdot \text{OutDegree}(v) + w_3 \cdo
 
 Normalized final score: $S(v) \in [0.0, 1.0]$.
 
+### 6.2 Explainable Reason Generator (`ServiceScore.Reasons`)
+
+Each evaluated service node receives structured, deterministic diagnostic explanations detailing the architectural rationale behind its score:
+
+| Driver | Condition | Generated Reason Format |
+|---|---|---|
+| **Single Point of Failure** | $\text{SPOF}(v) = 1.0$ (downstream services isolated) | `Single Point of Failure: <service> bottleneck isolates N downstream services (<list>)` |
+| **High In-Degree** | $\text{InDegree}(v) \ge 2$ | `High In-Degree: N upstream dependent services (<list>)` |
+| **Upstream Dependency** | $\text{InDegree}(v) = 1$ | `Upstream Dependency: called by <caller>` |
+| **Ingress Entrypoint** | $\text{InDegree}(v) = 0$ | `Ingress Entrypoint: directly receives external client traffic` |
+| **Traffic Throughput** | $\text{CallFreq}(v) / \text{MeshFreq} \ge 20\%$ | `High Traffic Volume: handles X calls/sec (Y% of mesh traffic)` |
+| **High Out-Degree** | $\text{OutDegree}(v) \ge 2$ | `High Out-Degree: fans out to N downstream dependencies (<list>)` |
+| **Leaf Service** | $\text{OutDegree}(v) = 0$ | `Leaf Service: terminal node with no downstream dependencies` |
+| **Execution Depth** | $\text{Depth}(v) \ge 2$ | `Deep Call Chain: depth N from ingress` |
+
+#### Public API
+
+```go
+package graph
+
+// CriticalityWeights defines the weight configuration for the scoring formula.
+type CriticalityWeights struct {
+	InDegree  float64
+	OutDegree float64
+	CallFreq  float64
+	Depth     float64
+	SPOF      float64
+}
+
+// DefaultCriticalityWeights provides the canonical weights specified in Section 6.1.
+var DefaultCriticalityWeights = CriticalityWeights{
+	InDegree:  0.35,
+	OutDegree: 0.15,
+	CallFreq:  0.25,
+	Depth:     0.10,
+	SPOF:      0.15,
+}
+
+// ScoreCriticality scores and generates reasons for all services using default weights.
+func ScoreCriticality(g *DependencyGraph) []ServiceScore
+
+// ScoreCriticalityWithWeights calculates criticality scores using custom weights.
+func ScoreCriticalityWithWeights(g *DependencyGraph, weights CriticalityWeights) []ServiceScore
+
+// GenerateReasons produces human-readable diagnostic explanation strings.
+func GenerateReasons(m NodeMetrics, meshTotalFreq float64) []string
+```
+
 ---
 
 ## 7. Safety Controller & Health Evaluation
