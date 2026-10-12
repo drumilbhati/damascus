@@ -368,3 +368,99 @@ func TestEndToEnd_HealthySnapshots_ContextStaysOpen(t *testing.T) {
 		t.Errorf("cancelFunc called %d times on healthy snapshots; want 0", count.Load())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SafetyController.Evaluate deterministic tests
+// ---------------------------------------------------------------------------
+
+func TestSafetyController_Evaluate_Healthy(t *testing.T) {
+	policy := safety.SafetyPolicy{
+		MaxP95LatencyMs: 500.0,
+		MaxErrorRate:    0.05,
+		MinAvailability: 0.99,
+	}
+	sc := safety.NewSafetyController(policy)
+
+	snapshot := watcher.MetricSnapshot{
+		P95LatencyMs: 250.0,
+		ErrorRate:    0.01,
+		Availability: 0.995,
+	}
+
+	decision := sc.Evaluate(snapshot)
+	if decision.ShouldStop {
+		t.Errorf("expected ShouldStop=false for healthy snapshot, got true with reason: %s", decision.Reason)
+	}
+}
+
+func TestSafetyController_Evaluate_P95Breach(t *testing.T) {
+	policy := safety.SafetyPolicy{
+		MaxP95LatencyMs: 500.0,
+		MaxErrorRate:    0.05,
+		MinAvailability: 0.99,
+	}
+	sc := safety.NewSafetyController(policy)
+
+	snapshot := watcher.MetricSnapshot{
+		P95LatencyMs: 550.0,
+		ErrorRate:    0.01,
+		Availability: 0.995,
+	}
+
+	decision := sc.Evaluate(snapshot)
+	if !decision.ShouldStop {
+		t.Fatal("expected ShouldStop=true on P95 latency breach, got false")
+	}
+	expectedReason := "P95 latency breached SLA: 550.00 ms > 500.00 ms"
+	if decision.Reason != expectedReason {
+		t.Errorf("expected reason %q, got %q", expectedReason, decision.Reason)
+	}
+}
+
+func TestSafetyController_Evaluate_ErrorRateBreach(t *testing.T) {
+	policy := safety.SafetyPolicy{
+		MaxP95LatencyMs: 500.0,
+		MaxErrorRate:    0.05,
+		MinAvailability: 0.99,
+	}
+	sc := safety.NewSafetyController(policy)
+
+	snapshot := watcher.MetricSnapshot{
+		P95LatencyMs: 250.0,
+		ErrorRate:    0.08,
+		Availability: 0.995,
+	}
+
+	decision := sc.Evaluate(snapshot)
+	if !decision.ShouldStop {
+		t.Fatal("expected ShouldStop=true on error rate breach, got false")
+	}
+	expectedReason := "Error rate breached SLA: 8.00% > 5.00%"
+	if decision.Reason != expectedReason {
+		t.Errorf("expected reason %q, got %q", expectedReason, decision.Reason)
+	}
+}
+
+func TestSafetyController_Evaluate_AvailabilityBreach(t *testing.T) {
+	policy := safety.SafetyPolicy{
+		MaxP95LatencyMs: 500.0,
+		MaxErrorRate:    0.05,
+		MinAvailability: 0.99,
+	}
+	sc := safety.NewSafetyController(policy)
+
+	snapshot := watcher.MetricSnapshot{
+		P95LatencyMs: 250.0,
+		ErrorRate:    0.01,
+		Availability: 0.95,
+	}
+
+	decision := sc.Evaluate(snapshot)
+	if !decision.ShouldStop {
+		t.Fatal("expected ShouldStop=true on availability breach, got false")
+	}
+	expectedReason := "Availability breached SLA: 95.00% < 99.00%"
+	if decision.Reason != expectedReason {
+		t.Errorf("expected reason %q, got %q", expectedReason, decision.Reason)
+	}
+}
