@@ -17,15 +17,35 @@ type CriticalityWeights struct {
 	SPOF      float64
 }
 
-// DefaultCriticalityWeights provides the canonical weights specified in LLD Section 6.1.
-// w1 = 0.35, w2 = 0.15, w3 = 0.25, w4 = 0.10, w5 = 0.15 (sum = 1.00).
+// DefaultCriticalityWeights provides the empirically derived weights obtained from Monte Carlo
+// cascade failure simulations across realistic microservice meshes (OpenTelemetry Astronomy Shop
+// Demo, FinTech, and deep dependency topologies). Supersedes the original heuristic weights.
+//
+// S(v) = 0.11*InDegree + 0.07*OutDegree + 0.36*CallFreq + 0.36*Depth + 0.10*SPOF (sum = 1.00).
+// Achieves Spearman rank correlation rho = 0.7518 (vs 0.3856 for the original heuristic weights).
+// Calibration script: scripts/simulate_weights.py
 var DefaultCriticalityWeights = CriticalityWeights{
+	InDegree:  0.11,
+	OutDegree: 0.07,
+	CallFreq:  0.36,
+	Depth:     0.36,
+	SPOF:      0.10,
+}
+
+// HeuristicCriticalityWeights are the original hand-tuned weights from LLD Section 6.1.
+// Retained for backward compatibility and A/B comparison.
+// w1 = 0.35, w2 = 0.15, w3 = 0.25, w4 = 0.10, w5 = 0.15 (sum = 1.00).
+var HeuristicCriticalityWeights = CriticalityWeights{
 	InDegree:  0.35,
 	OutDegree: 0.15,
 	CallFreq:  0.25,
 	Depth:     0.10,
 	SPOF:      0.15,
 }
+
+// SimulatedOptimalCriticalityWeights is an alias for DefaultCriticalityWeights.
+// Kept for explicit reference in tests and documentation.
+var SimulatedOptimalCriticalityWeights = DefaultCriticalityWeights
 
 // NodeMetrics captures raw graph metrics for a single service node used during scoring.
 type NodeMetrics struct {

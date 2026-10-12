@@ -238,6 +238,26 @@ func TestScoreCriticality_RankingOrder(t *testing.T) {
 	}
 }
 
+func TestScoreCriticality_SimulatedOptimalWeights(t *testing.T) {
+	g := graph.NewDependencyGraph()
+	g.AddEdge(graph.DependencyEdge{From: "frontend", To: "checkout", Frequency: 50.0})
+	g.AddEdge(graph.DependencyEdge{From: "checkout", To: "payment", Frequency: 40.0})
+
+	scores := graph.ScoreCriticalityWithWeights(g, graph.SimulatedOptimalCriticalityWeights)
+	if len(scores) != 3 {
+		t.Fatalf("expected 3 scores, got %d", len(scores))
+	}
+
+	for _, s := range scores {
+		if s.Score < 0.0 || s.Score > 1.0 {
+			t.Errorf("score for %s out of [0, 1] range: %f", s.ServiceName, s.Score)
+		}
+		if len(s.Reasons) == 0 {
+			t.Errorf("expected reasons populated for %s", s.ServiceName)
+		}
+	}
+}
+
 func TestAnalyzer_ScoreCriticality(t *testing.T) {
 	analyzer := graph.NewAnalyzer("http://localhost:16686", nil)
 	g := graph.NewDependencyGraph()

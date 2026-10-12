@@ -466,13 +466,13 @@ stateDiagram-v2
 
 | State Transition | Trigger / Condition | Actions Taken |
 | :--- | :--- | :--- |
-| `CREATED` $\rightarrow$ `PLANNED` | Valid request payload & reachable target service. | Construct `LoadPlan`, validate Prometheus metric queries. |
-| `PLANNED` $\rightarrow$ `RUNNING` | Orchestrator starts execution context. | Launch worker goroutines (`StressEngine`) & Prometheus poller (`WatcherEngine`). |
-| `RUNNING` $\rightarrow$ `STOPPING` | `SafetyController` triggers breach (`ShouldStop == true`) OR `/stop` called. | Invoke `context.CancelFunc` (instant stop), enter post-stress recovery monitoring. |
-| `RUNNING` $\rightarrow$ `ABORTED` | Unrecoverable engine error or database drop. | Cancel workers, record failure reason in Postgres, publish alert to Kafka. |
-| `STOPPING` $\rightarrow$ `ANALYZING` | Recovery window expires. | Pass collected observation array to `CapacityAnalyzer`. |
-| `ANALYZING` $\rightarrow$ `REPORTING` | Capacity metrics computed. | Pass results to `ReportEngine` to assemble final deliverable. |
-| `REPORTING` $\rightarrow$ `COMPLETED` | Artifacts stored. | Write report to PostgreSQL, publish completion event to Kafka topic `experiment-events`. |
+| `CREATED` → `PLANNED` | Valid request payload & reachable target service. | Construct `LoadPlan`, validate Prometheus metric queries. |
+| `PLANNED` → `RUNNING` | Orchestrator starts execution context. | Launch worker goroutines (`StressEngine`) & Prometheus poller (`WatcherEngine`). |
+| `RUNNING` → `STOPPING` | `SafetyController` triggers breach (`ShouldStop == true`) OR `/stop` called. | Invoke `context.CancelFunc` (instant stop), enter post-stress recovery monitoring. |
+| `RUNNING` → `ABORTED` | Unrecoverable engine error or database drop. | Cancel workers, record failure reason in Postgres, publish alert to Kafka. |
+| `STOPPING` → `ANALYZING` | Recovery window expires. | Pass collected observation array to `CapacityAnalyzer`. |
+| `ANALYZING` → `REPORTING` | Capacity metrics computed. | Pass results to `ReportEngine` to assemble final deliverable. |
+| `REPORTING` → `COMPLETED` | Artifacts stored. | Write report to PostgreSQL, publish completion event to Kafka topic `experiment-events`. |
 
 ---
 
@@ -555,16 +555,23 @@ sequenceDiagram
 
 ### 6.1 Criticality Score Formula
 
-$$S(v) = w_1 \cdot \text{InDegree}(v) + w_2 \cdot \text{OutDegree}(v) + w_3 \cdot \text{CallFreq}(v) + w_4 \cdot \text{Depth}(v) + w_5 \cdot \text{SPOF}(v)$$
+Each service node `v` receives a weighted criticality score `S(v)` in `[0.0, 1.0]`:
 
-- **$\text{InDegree}(v)$**: Number of upstream services depending on $v$.
-- **$\text{OutDegree}(v)$**: Number of downstream dependencies invoked by $v$.
-- **$\text{CallFreq}(v)$**: Normalized calls per second routed to $v$.
-- **$\text{Depth}(v)$**: Distance from the ingress API gateway.
-- **$\text{SPOF}(v)$**: Binary indicator (1.0 or 0.0) indicating whether failure of $v$ partitions the service graph.
-- **Weights**: $w_1 = 0.35, w_2 = 0.15, w_3 = 0.25, w_4 = 0.10, w_5 = 0.15$.
+```
+S(v) = w1·InDegree(v) + w2·OutDegree(v) + w3·CallFreq(v) + w4·Depth(v) + w5·SPOF(v)
+```
 
-Normalized final score: $S(v) \in [0.0, 1.0]$.
+All five input features are **max-normalized** to `[0.0, 1.0]` before scoring. Default weights:
+
+| Feature | Symbol | Default Weight | Description |
+|---|---|---|---|
+| In-Degree | `InDegree(v)` | **0.35** | Upstream services depending on `v` (normalized by max in-degree in mesh) |
+| Out-Degree | `OutDegree(v)` | **0.15** | Downstream dependencies called by `v` (normalized by max out-degree) |
+| Call Frequency | `CallFreq(v)` | **0.25** | Total incoming calls/sec (normalized by max frequency in mesh) |
+| Execution Depth | `Depth(v)` | **0.10** | BFS distance from ingress root (normalized by max depth) |
+| SPOF | `SPOF(v)` | **0.15** | `1.0` if removal of `v` partitions the graph, else `0.0` |
+
+**Constraint:** `w1 + w2 + w3 + w4 + w5 = 1.0`, all weights `>= 0`.
 
 ### 6.2 Explainable Reason Generator (`ServiceScore.Reasons`)
 
@@ -572,14 +579,14 @@ Each evaluated service node receives structured, deterministic diagnostic explan
 
 | Driver | Condition | Generated Reason Format |
 |---|---|---|
-| **Single Point of Failure** | $\text{SPOF}(v) = 1.0$ (downstream services isolated) | `Single Point of Failure: <service> bottleneck isolates N downstream services (<list>)` |
-| **High In-Degree** | $\text{InDegree}(v) \ge 2$ | `High In-Degree: N upstream dependent services (<list>)` |
-| **Upstream Dependency** | $\text{InDegree}(v) = 1$ | `Upstream Dependency: called by <caller>` |
-| **Ingress Entrypoint** | $\text{InDegree}(v) = 0$ | `Ingress Entrypoint: directly receives external client traffic` |
-| **Traffic Throughput** | $\text{CallFreq}(v) / \text{MeshFreq} \ge 20\%$ | `High Traffic Volume: handles X calls/sec (Y% of mesh traffic)` |
-| **High Out-Degree** | $\text{OutDegree}(v) \ge 2$ | `High Out-Degree: fans out to N downstream dependencies (<list>)` |
-| **Leaf Service** | $\text{OutDegree}(v) = 0$ | `Leaf Service: terminal node with no downstream dependencies` |
-| **Execution Depth** | $\text{Depth}(v) \ge 2$ | `Deep Call Chain: depth N from ingress` |
+| **Single Point of Failure** | `SPOF(v) = 1.0` (downstream services isolated) | `Single Point of Failure: <service> bottleneck isolates N downstream services (<list>)` |
+| **High In-Degree** | `InDegree(v) >= 2` | `High In-Degree: N upstream dependent services (<list>)` |
+| **Upstream Dependency** | `InDegree(v) = 1` | `Upstream Dependency: called by <caller>` |
+| **Ingress Entrypoint** | `InDegree(v) = 0` | `Ingress Entrypoint: directly receives external client traffic` |
+| **Traffic Throughput** | `CallFreq(v) / MeshFreq >= 20%` | `High Traffic Volume: handles X calls/sec (Y% of mesh traffic)` |
+| **High Out-Degree** | `OutDegree(v) >= 2` | `High Out-Degree: fans out to N downstream dependencies (<list>)` |
+| **Leaf Service** | `OutDegree(v) = 0` | `Leaf Service: terminal node with no downstream dependencies` |
+| **Execution Depth** | `Depth(v) >= 2` | `Deep Call Chain: depth N from ingress` |
 
 #### Public API
 
@@ -604,6 +611,18 @@ var DefaultCriticalityWeights = CriticalityWeights{
 	SPOF:      0.15,
 }
 
+// SimulatedOptimalCriticalityWeights provides the empirically derived weights
+// obtained from Monte Carlo cascade failure simulations across realistic microservice meshes
+// (OpenTelemetry Astronomy Shop Demo, FinTech, and deep dependency topologies).
+// Achieves Spearman rank correlation rho = 0.7518 (vs 0.3856 for heuristic default weights).
+var SimulatedOptimalCriticalityWeights = CriticalityWeights{
+	InDegree:  0.11,
+	OutDegree: 0.07,
+	CallFreq:  0.36,
+	Depth:     0.36,
+	SPOF:      0.10,
+}
+
 // ScoreCriticality scores and generates reasons for all services using default weights.
 func ScoreCriticality(g *DependencyGraph) []ServiceScore
 
@@ -613,6 +632,66 @@ func ScoreCriticalityWithWeights(g *DependencyGraph, weights CriticalityWeights)
 // GenerateReasons produces human-readable diagnostic explanation strings.
 func GenerateReasons(m NodeMetrics, meshTotalFreq float64) []string
 ```
+
+### 6.3 Empirical Weight Derivation & Simulation Methodology
+
+To prevent arbitrary heuristic weight assignments, DAMASCUS provides an empirical calibration framework in [`scripts/simulate_weights.py`](../scripts/simulate_weights.py). The simulation models fault injection across microservice architectures to ground scoring weights in measurable system blast radius.
+
+#### 6.3.1 Problem Formulation
+
+The objective is to find the optimal weight vector `w = (w1, w2, w3, w4, w5)` that maximizes Spearman rank correlation between the predicted score `S(v)` and the empirically measured ground-truth failure impact `C(v)`:
+
+```
+maximize  rho( S(v; w), C(v) )
+subject to  w1 + w2 + w3 + w4 + w5 = 1.0,  wi >= 0
+```
+
+#### 6.3.2 Simulation Engine Architecture
+
+1. **Topology & Traffic Modeling**:
+   - **Target Topologies**: Evaluates the canonical 12-service OpenTelemetry Astronomy Shop Demo, a 16-service tiered FinTech banking mesh, a 14-service media streaming platform, and a 10-service deep dependency pipeline.
+   - **Critical vs. Non-Critical Edges**: Distinguishes synchronous non-fallback dependencies (e.g., `checkoutservice -> paymentservice`, `cartservice -> valkey-cart`) from soft fallbacks (e.g., `frontend -> adservice`, `frontend -> recommendationservice`).
+   - **Multi-Path User Journeys**: Simulates weighted end-to-end transaction flows (e.g., catalog browsing, cart operations, checkout processing).
+
+2. **Fault Injection & Ground-Truth Blast Radius `C(v)`**:
+   For every service `v`, the engine performs 100% failure injection and measures:
+   - **Transaction Loss `F(v)`**: Fraction of end-to-end user transactions that fail due to cascading dependency failure.
+   - **Blast Radius `B(v)`**: Fraction of mesh services knocked offline when upstream callers lack resilience fallbacks.
+   - **Structural Isolation `I(v)`**: Fraction of services partitioned from ingress roots.
+   - **Composite Ground Truth**:
+     ```
+     C(v) = 0.50 * F(v) + 0.30 * B(v) + 0.20 * I(v),  normalized to [0.0, 1.0]
+     ```
+
+3. **5-Simplex Grid Search & Optimization**:
+   - Discretizes the probability simplex at step `Δ = 0.05`, generating **10,626** candidate weight vectors.
+   - Evaluates each vector using Spearman rank correlation (`rho`), Kendall tau (`tau`), Mean Squared Error (MSE), and NDCG@5.
+   - Performs local neighborhood refinement with step `Δ = 0.01` around the top candidate.
+
+#### 6.3.3 Empirical Results & Comparison
+
+| Parameter / Metric | Heuristic Default (`DefaultCriticalityWeights`) | Simulated Optimal (`SimulatedOptimalCriticalityWeights`) | Architectural Rationale |
+|---|---|---|---|
+| **w1 (In-Degree)** | `0.35` | **`0.11`** | High in-degree alone overweights non-critical entrypoints. |
+| **w2 (Out-Degree)** | `0.15` | **`0.07`** | Fan-out complexity has lower marginal impact on outage scope. |
+| **w3 (Call Frequency)** | `0.25` | **`0.36`** | High traffic volume directly amplifies system-wide transaction loss. |
+| **w4 (Execution Depth)** | `0.10` | **`0.36`** | Deep critical sinks cause catastrophic synchronous failures. |
+| **w5 (SPOF)** | `0.15` | **`0.10`** | Rebalanced alongside depth and traffic volume. |
+| **Spearman Rank Correlation (rho)** | `0.3856` | **`0.7518`** | **+95.0% rank agreement with ground truth failure.** |
+| **Kendall's Tau (tau)** | `0.2324` | **`0.5799`** | **+149.5% pairwise concordance improvement.** |
+| **Mean Squared Error (MSE)** | `0.2221` | **`0.2048`** | **-7.8% prediction error reduction.** |
+| **NDCG @ 5** | `0.9294` | **`0.9671`** | **+4.1% top-5 ranking accuracy.** |
+
+#### 6.3.4 Architectural Insights & Feature Ablation
+
+Ablation analysis (evaluating marginal correlation loss when removing each feature) yielded key distributed systems findings:
+
+- **Depth Ablation (Δrho = -0.4476):** Removing Execution Depth drops Spearman correlation from `0.7518` to `0.3042`. In distributed microservices, leaf sink nodes (e.g., caches, key-value stores, payment processors) typically have an In-Degree of only 1, but sit at maximum depth on critical synchronous paths. Under-weighting Depth misclassifies these single points of systemic failure as low criticality.
+- **Call Frequency Ablation (Δrho = -0.2630):** Removing traffic volume drops correlation from `0.7518` to `0.4888`, confirming that throughput concentration is the second primary driver of actual user-perceived blast radius.
+- **Reproducibility:** The calibration routine can be executed at any time via:
+  ```bash
+  python3 scripts/simulate_weights.py
+  ```
 
 ---
 
