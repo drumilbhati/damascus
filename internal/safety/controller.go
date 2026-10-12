@@ -2,11 +2,61 @@ package safety
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
 	"damascus/internal/watcher"
 )
+
+// SafetyController evaluates telemetry snapshots against a configured SafetyPolicy.
+type SafetyController struct {
+	policy SafetyPolicy
+}
+
+// NewSafetyController constructs a new SafetyController with the given policy.
+func NewSafetyController(policy SafetyPolicy) *SafetyController {
+	return &SafetyController{
+		policy: policy,
+	}
+}
+
+// Evaluate evaluates a metric snapshot deterministically against the safety policy.
+// It returns a SafetyDecision indicating whether an SLA threshold was breached.
+func (sc *SafetyController) Evaluate(snapshot watcher.MetricSnapshot) SafetyDecision {
+	// TODO: Check P95 Latency SLA breach:
+	// If sc.policy.MaxP95LatencyMs > 0 and snapshot.P95LatencyMs > sc.policy.MaxP95LatencyMs,
+	// return SafetyDecision{ShouldStop: true, Reason: fmt.Sprintf("P95 latency breached SLA: %.2f ms > %.2f ms", ...)}
+	if sc.policy.MaxP95LatencyMs > 0 && snapshot.P95LatencyMs > sc.policy.MaxP95LatencyMs {
+		return SafetyDecision{
+			ShouldStop: true,
+			Reason:     fmt.Sprintf("P95 latency breached SLA: %.2f ms > %.2f ms", snapshot.P95LatencyMs, sc.policy.MaxP95LatencyMs),
+		}
+	}
+
+	// TODO: Check Error Rate SLA breach:
+	// If sc.policy.MaxErrorRate > 0 and snapshot.ErrorRate > sc.policy.MaxErrorRate,
+	// return SafetyDecision{ShouldStop: true, Reason: fmt.Sprintf("Error rate breached SLA: %.2f%% > %.2f%%", ...)}
+	if sc.policy.MaxErrorRate > 0 && snapshot.ErrorRate > sc.policy.MaxErrorRate {
+		return SafetyDecision{
+			ShouldStop: true,
+			Reason:     fmt.Sprintf("Error rate breached SLA: %.2f%% > %.2f%%", snapshot.ErrorRate*100, sc.policy.MaxErrorRate*100),
+		}
+	}
+
+	// TODO: Check Availability SLA breach:
+	// If sc.policy.MinAvailability > 0 and snapshot.Availability < sc.policy.MinAvailability,
+	// return SafetyDecision{ShouldStop: true, Reason: fmt.Sprintf("Availability breached SLA: %.2f%% < %.2f%%", ...)}
+	if sc.policy.MinAvailability > 0 && snapshot.Availability < sc.policy.MinAvailability {
+		return SafetyDecision{
+			ShouldStop: true,
+			Reason:     fmt.Sprintf("Availability breached SLA: %.2f%% < %.2f%%", snapshot.Availability*100, sc.policy.MinAvailability*100),
+		}
+	}
+
+	// TODO: Return SafetyDecision{ShouldStop: false} when all metrics are within acceptable thresholds
+	return SafetyDecision{ShouldStop: false}
+}
 
 // EvaluatingController composes the base Controller with a SafetyPolicy and an
 // experiment-scoped context.CancelFunc, wiring the WatcherEngine metric stream
