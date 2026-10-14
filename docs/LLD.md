@@ -862,7 +862,8 @@ The background event logger consumer reads asynchronous domain events from the `
 ```go
 // KafkaReader defines the minimal contract for consuming Kafka messages.
 type KafkaReader interface {
-    ReadMessage(ctx context.Context) (kafka.Message, error)
+    FetchMessage(ctx context.Context) (kafka.Message, error)
+    CommitMessages(ctx context.Context, msgs ...kafka.Message) error
     Close() error
 }
 

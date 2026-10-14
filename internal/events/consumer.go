@@ -36,7 +36,8 @@ const (
 // KafkaReader defines the minimal interface required for consuming Kafka messages.
 // This interface is satisfied directly by *kafka.Reader and facilitates unit testing.
 type KafkaReader interface {
-	ReadMessage(ctx context.Context) (kafka.Message, error)
+	FetchMessage(ctx context.Context) (kafka.Message, error)
+	CommitMessages(ctx context.Context, msgs ...kafka.Message) error
 	Close() error
 }
 
@@ -87,14 +88,20 @@ func NewEventConsumer(cfg ConsumerConfig) (*EventConsumer, error) {
 
 	normalizeConfig(&cfg)
 
-	reader := kafka.NewReader(kafka.ReaderConfig{
+	readerCfg := kafka.ReaderConfig{
 		Brokers:  cfg.Brokers,
 		GroupID:  cfg.GroupID,
 		Topic:    cfg.Topic,
 		MinBytes: cfg.MinBytes,
 		MaxBytes: cfg.MaxBytes,
 		MaxWait:  cfg.MaxWait,
-	})
+	}
+
+	if err := readerCfg.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid kafka reader configuration: %w", err)
+	}
+
+	reader := kafka.NewReader(readerCfg)
 
 	return NewEventConsumerWithReader(reader, cfg), nil
 }
@@ -165,14 +172,22 @@ func (ec *EventConsumer) Start(ctx context.Context) error {
 		default:
 		}
 
-		msg, err := ec.reader.ReadMessage(ctx)
+		msg, err := ec.reader.FetchMessage(ctx)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				return ctx.Err()
 			}
-			ec.logger.Error("failed to read kafka message", slog.Any("error", err))
+			if errors.Is(err, io.EOF) || strings.Contains(strings.ToLower(err.Error()), "closed") {
+				ec.logger.Info("stopping kafka event logger consumer: reader closed")
+				return err
+			}
+			ec.logger.Error("failed to fetch kafka message", slog.Any("error", err))
 			// Brief backoff on transient errors to avoid tight error loops
-			time.Sleep(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(100 * time.Millisecond):
+			}
 			continue
 		}
 
@@ -181,9 +196,31 @@ func (ec *EventConsumer) Start(ctx context.Context) error {
 			ec.logger.Warn("skipping unparseable event message",
 				slog.Int("partition", msg.Partition),
 				slog.Int64("offset", msg.Offset),
-				slog.String("raw_value", string(msg.Value)),
+				slog.Int("payload_bytes", len(msg.Value)),
 				slog.Any("error", err),
 			)
+			if commitErr := ec.reader.CommitMessages(ctx, msg); commitErr != nil {
+				if errors.Is(commitErr, context.Canceled) || ctx.Err() != nil {
+					return ctx.Err()
+				}
+				ec.logger.Error("failed to commit unparseable message", slog.Any("error", commitErr))
+			}
+			continue
+		}
+
+		if event.EventType == "" || event.ExperimentID == "" {
+			ec.logger.Warn("skipping invalid event message: missing required fields",
+				slog.Int("partition", msg.Partition),
+				slog.Int64("offset", msg.Offset),
+				slog.String("event_type", string(event.EventType)),
+				slog.String("experiment_id", event.ExperimentID),
+			)
+			if commitErr := ec.reader.CommitMessages(ctx, msg); commitErr != nil {
+				if errors.Is(commitErr, context.Canceled) || ctx.Err() != nil {
+					return ctx.Err()
+				}
+				ec.logger.Error("failed to commit invalid message", slog.Any("error", commitErr))
+			}
 			continue
 		}
 
@@ -191,6 +228,15 @@ func (ec *EventConsumer) Start(ctx context.Context) error {
 		logLine := FormatAuditLog(event, msg.Partition, msg.Offset)
 		if _, writeErr := fmt.Fprintln(ec.output, logLine); writeErr != nil {
 			ec.logger.Error("failed to write audit log output", slog.Any("error", writeErr))
+			return writeErr
+		}
+
+		// Commit the message only after the audit write succeeds
+		if err := ec.reader.CommitMessages(ctx, msg); err != nil {
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+				return ctx.Err()
+			}
+			ec.logger.Error("failed to commit kafka message", slog.Any("error", err))
 		}
 
 		// Emit structured log at appropriate severity
@@ -226,6 +272,29 @@ func (ec *EventConsumer) logEvent(event DomainEvent, partition int, offset int64
 	}
 }
 
+// sanitizeLogField replaces control characters (newlines, carriage returns, etc.) with
+// safe escaped sequences to prevent audit log injection and multi-line formatting issues.
+func sanitizeLogField(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r < 32 || r == 127 {
+			switch r {
+			case '\n':
+				b.WriteString(`\n`)
+			case '\r':
+				b.WriteString(`\r`)
+			case '\t':
+				b.WriteString(`\t`)
+			default:
+				fmt.Fprintf(&b, `\x%02x`, r)
+			}
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // FormatAuditLog formats a DomainEvent into a concise, human-readable console audit log line.
 func FormatAuditLog(event DomainEvent, partition int, offset int64) string {
 	ts := event.Timestamp.UTC().Format(time.RFC3339)
@@ -255,18 +324,23 @@ func FormatAuditLog(event DomainEvent, partition int, offset int64) string {
 	}
 
 	service := event.Service
-	if service == "" {
+	if strings.TrimSpace(service) == "" {
 		service = "-"
 	}
+
+	cleanService := sanitizeLogField(service)
+	cleanEventType := sanitizeLogField(strings.TrimSpace(string(event.EventType)))
+	cleanExpID := sanitizeLogField(strings.TrimSpace(event.ExperimentID))
+	cleanPayload := sanitizeLogField(payloadJSON)
 
 	return fmt.Sprintf("[AUDIT] %s %s | TYPE=%-22s | EXP=%-12s | SVC=%-14s | [P:%d O:%d] | PAYLOAD=%s",
 		icon,
 		ts,
-		strings.TrimSpace(string(event.EventType)),
-		strings.TrimSpace(event.ExperimentID),
-		service,
+		cleanEventType,
+		cleanExpID,
+		cleanService,
 		partition,
 		offset,
-		payloadJSON,
+		cleanPayload,
 	)
 }
