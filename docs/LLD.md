@@ -853,6 +853,41 @@ func WithLogger(l *slog.Logger) WatcherEngineOption
 }
 ```
 
+### 8.1 Kafka Event Consumer (`internal/events/consumer.go`)
+
+The background event logger consumer reads asynchronous domain events from the `experiment-events` topic using Kafka consumer groups and outputs structured, human-readable audit logs to the console and logger.
+
+#### Interface Contracts & Data Models
+
+```go
+// KafkaReader defines the minimal contract for consuming Kafka messages.
+type KafkaReader interface {
+    FetchMessage(ctx context.Context) (kafka.Message, error)
+    CommitMessages(ctx context.Context, msgs ...kafka.Message) error
+    Close() error
+}
+
+// ConsumerConfig specifies consumer group connection and buffer options.
+type ConsumerConfig struct {
+    Brokers  []string
+    Topic    string        // default: "experiment-events"
+    GroupID  string        // default: "damascus-event-logger-group"
+    MinBytes int           // default: 10KB
+    MaxBytes int           // default: 10MB
+    MaxWait  time.Duration // default: 1s
+    Logger   *slog.Logger
+    Output   io.Writer     // default: os.Stdout
+}
+
+// EventConsumer orchestrates background consumption and audit logging.
+type EventConsumer struct {
+    reader KafkaReader
+    cfg    ConsumerConfig
+    logger *slog.Logger
+    output io.Writer
+}
+```
+
 ---
 
 ## 9. PostgreSQL Storage Schema (DDL)
