@@ -473,6 +473,22 @@ stateDiagram-v2
 | `STOPPING` → `ANALYZING` | Recovery window expires. | Pass collected observation array to `CapacityAnalyzer`. |
 | `ANALYZING` → `REPORTING` | Capacity metrics computed. | Pass results to `ReportEngine` to assemble final deliverable. |
 | `REPORTING` → `COMPLETED` | Artifacts stored. | Write report to PostgreSQL, publish completion event to Kafka topic `experiment-events`. |
+| *Any Active State* → `ABORTED` | Cancellation, threshold breach abort, unrecoverable failure. | Cancel context, record stop reason, clean up goroutines. |
+
+### State Transition Validation Functions
+
+```go
+package experiment
+
+// ErrInvalidTransition is returned when a state transition is not allowed.
+var ErrInvalidTransition = errors.New("invalid state transition")
+
+// ValidateTransition verifies whether transitioning from current to target is legal.
+func ValidateTransition(current, target ExperimentState) error
+
+// CanTransition returns true if transitioning from current to target is legal.
+func CanTransition(current, target ExperimentState) bool
+```
 
 ---
 

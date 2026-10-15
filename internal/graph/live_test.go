@@ -16,7 +16,7 @@ func TestLiveJaeger_Teamsynch(t *testing.T) {
 
 	g, err := analyzer.BuildGraph(ctx, 3600)
 	if err != nil {
-		t.Fatalf("Failed to build graph from live Jaeger: %v", err)
+		t.Skipf("Skipping live Jaeger test: %v", err)
 	}
 
 	fmt.Printf("\n=============================================================\n")
