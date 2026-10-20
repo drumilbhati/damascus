@@ -67,6 +67,7 @@ type Manager struct {
 	repo             ExperimentRepository
 
 	mu             sync.RWMutex
+	stateMu        sync.Mutex
 	activeRuns     map[string]context.CancelFunc
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
@@ -153,7 +154,7 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 	if exp.State != StateCreated {
 		return fmt.Errorf("experiment %s is not in StateCreated; current state: %s", id, exp.State)
 	}
-	if err := m.repo.UpdateState(ctx, id, StatePlanned, ""); err != nil {
+	if err := m.transitionState(ctx, id, StatePlanned, ""); err != nil {
 		return fmt.Errorf("failed to transition experiment %s to StatePlanned: %w", id, err)
 	}
 
@@ -161,32 +162,36 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 	if m.graphAnalyzer != nil {
 		dependencyGraph, err := m.graphAnalyzer.BuildGraph(ctx, 3600)
 		if err != nil {
-			_ = m.repo.UpdateState(ctx, id, StateAborted, err.Error())
+			_ = m.transitionState(ctx, id, StateAborted, err.Error())
 			return fmt.Errorf("failed to build dependency graph: %w", err)
 		}
 		scores = m.graphAnalyzer.ScoreCriticality(dependencyGraph)
 	}
 	if m.stressEngine == nil {
-		_ = m.repo.UpdateState(ctx, id, StateAborted, "stress engine is nil")
+		_ = m.transitionState(ctx, id, StateAborted, "stress engine is nil")
 		return errors.New("stress engine is nil")
 	}
 	if m.watcher == nil {
-		_ = m.repo.UpdateState(ctx, id, StateAborted, "watcher is nil")
+		_ = m.transitionState(ctx, id, StateAborted, "watcher is nil")
 		return errors.New("watcher is nil")
 	}
 
-	runCtx, cancel := context.WithCancel(ctx)
+	expCtx, cancelExp := context.WithCancel(ctx)
+	stressCtx, cancelStress := context.WithCancel(expCtx)
+
 	m.mu.Lock()
 	if _, exists := m.activeRuns[id]; exists {
 		m.mu.Unlock()
-		cancel()
+		cancelStress()
+		cancelExp()
 		return fmt.Errorf("experiment %s is already running", id)
 	}
-	m.activeRuns[id] = cancel
+	m.activeRuns[id] = cancelStress
 	m.mu.Unlock()
 
-	if err := m.repo.UpdateState(ctx, id, StateRunning, ""); err != nil {
-		cancel()
+	if err := m.transitionState(ctx, id, StateRunning, ""); err != nil {
+		cancelStress()
+		cancelExp()
 		m.removeActiveRun(id)
 		return fmt.Errorf("failed to transition experiment %s to StateRunning: %w", id, err)
 	}
@@ -201,7 +206,8 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 	signalFailure := func(err error) {
 		failureOnce.Do(func() {
 			startErrs <- err
-			cancel()
+			cancelStress()
+			cancelExp()
 		})
 	}
 	var stopOnce sync.Once
@@ -213,51 +219,55 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 			ErrorRate:    snapshot.ErrorRate,
 			Availability: snapshot.Availability,
 		}
-		if err := m.repo.SaveObservation(runCtx, id, observation); err != nil {
+		if err := m.repo.SaveObservation(expCtx, id, observation); err != nil {
 			signalFailure(fmt.Errorf("failed to save observation: %w", err))
+			return
+		}
+		if stressCtx.Err() != nil {
+			// Stress traffic already stopped; no need to evaluate safety stop during recovery
 			return
 		}
 		if m.safetyController == nil {
 			signalFailure(errors.New("safety controller is nil"))
 			return
 		}
-		decision := m.safetyController.Evaluate(runCtx, snapshot, policy)
+		decision := m.safetyController.Evaluate(expCtx, snapshot, policy)
 		if decision.ShouldStop {
-			stopOnce.Do(cancel)
+			stopOnce.Do(cancelStress)
 		}
 	}
 	m.watcher.SetSnapshotHandler(handler)
 	go func() {
-		if err := m.watcher.Start(runCtx, id, exp.TargetService); err != nil {
+		if err := m.watcher.Start(expCtx, id, exp.TargetService); err != nil {
 			signalFailure(fmt.Errorf("watcher failed: %w", err))
 		}
 	}()
+
+	stressDone := make(chan struct{})
 	go func() {
-		if err := m.stressEngine.Start(runCtx, plan); err != nil {
+		defer close(stressDone)
+		if err := m.stressEngine.Start(stressCtx, plan); err != nil {
 			if !errors.Is(err, context.Canceled) {
 				signalFailure(fmt.Errorf("stress engine failed: %w", err))
 			}
 			return
 		}
-		cancel()
+		cancelStress()
 	}()
 
-	go m.finishExperiment(runCtx, cancel, startErrs, *exp, scores)
+	go m.finishExperiment(expCtx, cancelExp, stressDone, startErrs, *exp, scores)
 	return nil
 }
 
 func (m *Manager) StopExperiment(ctx context.Context, id, reason string) error {
 	m.mu.Lock()
 	cancel, ok := m.activeRuns[id]
-	if ok {
-		delete(m.activeRuns, id)
-	}
 	m.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("experiment %s is not actively running", id)
 	}
 	cancel()
-	if err := m.repo.UpdateState(ctx, id, StateStopping, reason); err != nil {
+	if err := m.transitionState(ctx, id, StateStopping, reason); err != nil {
 		return fmt.Errorf("failed to stop experiment %s: %w", id, err)
 	}
 	return nil
@@ -280,60 +290,111 @@ func (m *Manager) removeActiveRun(id string) {
 	m.mu.Unlock()
 }
 
-func (m *Manager) finishExperiment(runCtx context.Context, cancel context.CancelFunc, startErrs <-chan error, exp Experiment, scores []graph.ServiceScore) {
+// transitionState safely updates the experiment state under mutex synchronization,
+// ensuring that transitions strictly adhere to the state machine matrix.
+func (m *Manager) transitionState(ctx context.Context, id string, target ExperimentState, reason string) error {
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+
+	exp, err := m.repo.GetByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve experiment %s: %w", id, err)
+	}
+	if exp == nil {
+		return fmt.Errorf("experiment %s was not found", id)
+	}
+
+	if err := ValidateTransition(exp.State, target); err != nil {
+		return err
+	}
+
+	if err := m.repo.UpdateState(ctx, id, target, reason); err != nil {
+		return fmt.Errorf("failed to update state for experiment %s: %w", id, err)
+	}
+
+	return nil
+}
+
+func (m *Manager) finishExperiment(
+	expCtx context.Context,
+	cancelExp context.CancelFunc,
+	stressDone <-chan struct{},
+	startErrs <-chan error,
+	exp Experiment,
+	scores []graph.ServiceScore,
+) {
+	defer cancelExp()
+	defer m.removeActiveRun(exp.ID)
+
 	var stopReason string
 	select {
 	case err := <-startErrs:
 		stopReason = err.Error()
-		cancel()
 	default:
 		select {
 		case err := <-startErrs:
 			stopReason = err.Error()
-			cancel()
-		case <-runCtx.Done():
-			// The run was stopped normally, manually, or by the safety controller.
+		case <-stressDone:
+			// Traffic generation stopped normally or via cancellation.
+		case <-expCtx.Done():
+			// Context was cancelled.
+		}
+	}
+
+	workCtx := context.Background()
+
+	// If an engine start failure occurred, abort immediately.
+	if stopReason != "" {
+		if m.watcher != nil {
+			m.watcher.Stop()
+		}
+		if m.stressEngine != nil {
+			m.stressEngine.Stop()
+		}
+		m.abortExperiment(workCtx, exp.ID, stopReason)
+		return
+	}
+
+	if m.stressEngine != nil {
+		m.stressEngine.Stop()
+	}
+
+	curr, err := m.repo.GetByID(workCtx, exp.ID)
+	if err != nil {
+		m.abortExperiment(workCtx, exp.ID, err.Error())
+		return
+	}
+	if curr == nil || curr.State != StateStopping {
+		if err := m.transitionState(workCtx, exp.ID, StateStopping, ""); err != nil {
+			m.abortExperiment(workCtx, exp.ID, err.Error())
+			return
+		}
+	}
+
+	if exp.Config.RecoveryWindowSec > 0 {
+		timer := time.NewTimer(time.Duration(exp.Config.RecoveryWindowSec) * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			// Recovery observation window elapsed.
+		case <-m.shutdownCtx.Done():
+			m.abortExperiment(workCtx, exp.ID, "manager shutdown")
+			if m.watcher != nil {
+				m.watcher.Stop()
+			}
+			return
 		}
 	}
 
 	if m.watcher != nil {
 		m.watcher.Stop()
 	}
-	if m.stressEngine != nil {
-		m.stressEngine.Stop()
+	if err := m.transitionState(workCtx, exp.ID, StateAnalyzing, ""); err != nil {
+		m.abortExperiment(workCtx, exp.ID, err.Error())
+		return
 	}
-	m.removeActiveRun(exp.ID)
-	workCtx := context.Background()
 
-	if stopReason != "" {
-		_ = m.repo.UpdateState(workCtx, exp.ID, StateAborted, stopReason)
-		return
-	}
-	current, err := m.repo.GetByID(workCtx, exp.ID)
-	if err != nil {
-		m.abortExperiment(workCtx, exp.ID, err.Error())
-		return
-	}
-	if current == nil || current.State != StateStopping {
-		if err := m.repo.UpdateState(workCtx, exp.ID, StateStopping, ""); err != nil {
-			m.abortExperiment(workCtx, exp.ID, err.Error())
-			return
-		}
-	}
-	if exp.Config.RecoveryWindowSec > 0 {
-		timer := time.NewTimer(time.Duration(exp.Config.RecoveryWindowSec) * time.Second)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-		case <-m.shutdownCtx.Done():
-			m.abortExperiment(workCtx, exp.ID, "manager shutdown")
-			return
-		}
-	}
-	if err := m.repo.UpdateState(workCtx, exp.ID, StateAnalyzing, ""); err != nil {
-		m.abortExperiment(workCtx, exp.ID, err.Error())
-		return
-	}
+	// Remaining pipeline: Analysis, Reporting, Completion
 	observations, err := m.repo.GetObservations(workCtx, exp.ID)
 	if err != nil {
 		m.abortExperiment(workCtx, exp.ID, err.Error())
@@ -353,7 +414,7 @@ func (m *Manager) finishExperiment(runCtx context.Context, cancel context.Cancel
 		m.abortExperiment(workCtx, exp.ID, "report engine is nil")
 		return
 	}
-	if err := m.repo.UpdateState(workCtx, exp.ID, StateReporting, ""); err != nil {
+	if err := m.transitionState(workCtx, exp.ID, StateReporting, ""); err != nil {
 		m.abortExperiment(workCtx, exp.ID, err.Error())
 		return
 	}
@@ -366,11 +427,11 @@ func (m *Manager) finishExperiment(runCtx context.Context, cancel context.Cancel
 		m.abortExperiment(workCtx, exp.ID, err.Error())
 		return
 	}
-	if err := m.repo.UpdateState(workCtx, exp.ID, StateCompleted, ""); err != nil {
+	if err := m.transitionState(workCtx, exp.ID, StateCompleted, ""); err != nil {
 		m.abortExperiment(workCtx, exp.ID, err.Error())
 	}
 }
 
 func (m *Manager) abortExperiment(ctx context.Context, id, reason string) {
-	_ = m.repo.UpdateState(ctx, id, StateAborted, reason)
+	_ = m.transitionState(ctx, id, StateAborted, reason)
 }
