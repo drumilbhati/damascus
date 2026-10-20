@@ -490,6 +490,11 @@ func ValidateTransition(current, target ExperimentState) error
 func CanTransition(current, target ExperimentState) bool
 ```
 
+### Thread-Safe State Mutations & Recovery Observation
+Experiment state transitions in `ExperimentManager` are protected by a dedicated `sync.Mutex` (`stateMu`), serializing mutations and validating every transition through `ValidateTransition(current, target)` before updating repository records.
+
+When traffic generation halts (via plan completion, safety threshold breach, or manual `/stop`), `ExperimentManager` transitions to `STOPPING` and enters the post-stress recovery window. During `RecoveryWindowSec`, the `WatcherEngine` remains active to capture telemetry until the recovery timer elapses, at which point the watcher is stopped and the experiment transitions from `STOPPING` to `ANALYZING`.
+
 ---
 
 ## 5. Concurrency & Fast-Path Context Cancellation
