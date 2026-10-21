@@ -857,11 +857,26 @@ func WithLogger(l *slog.Logger) WatcherEngineOption
 
 **Topic**: `experiment-events`
 
+### 8.1 JSON Event Envelope Schema (`internal/events/event.go`)
+
+All domain events emitted across Kafka follow the structured `Event` envelope schema:
+
+```go
+type Event struct {
+    ID           string          `json:"id"`
+    ExperimentID string          `json:"experiment_id"`
+    Type         EventType       `json:"type"`
+    Timestamp    time.Time       `json:"timestamp"`
+    Service      string          `json:"service,omitempty"`
+    Payload      json.RawMessage `json:"payload,omitempty"`
+}
+```
+
 ```json
 {
-  "event_id": "evt_01J8R9XQ7A",
+  "id": "evt_01J8R9XQ7A",
   "experiment_id": "exp_01J8R9W4N2",
-  "event_type": "SAFETY_STOP_TRIGGERED",
+  "type": "THRESHOLD_BREACHED",
   "timestamp": "2026-08-20T07:30:00Z",
   "service": "checkoutservice",
   "payload": {
@@ -874,7 +889,59 @@ func WithLogger(l *slog.Logger) WatcherEngineOption
 }
 ```
 
-### 8.1 Kafka Event Consumer (`internal/events/consumer.go`)
+#### Event Types Matrix
+
+| Event Type | Category | Description |
+| :--- | :--- | :--- |
+| `EXPERIMENT_STARTED` | Lifecycle | Emitted when experiment execution begins and stress workers launch. |
+| `LOAD_CHANGED` | Stress / Load | Emitted when step load adjusts (rate or concurrency changes). |
+| `METRIC_SNAPSHOT` | Telemetry | Emitted when the watcher engine samples Prometheus health metrics. |
+| `THRESHOLD_BREACHED` | Safety | Emitted when a critical safety SLO threshold is breached. |
+| `EXPERIMENT_STOPPED` | Lifecycle | Emitted when load generation terminates (manual stop or safety abort). |
+| `COMPLETED` | Lifecycle | Emitted when capacity analysis and final reports are persisted. |
+
+*Legacy Aliases (backward compatible)*: `LOAD_STEP_CHANGED`, `SAFETY_STOP_TRIGGERED`, `EXPERIMENT_COMPLETED`, `EXPERIMENT_ABORTED`.
+
+---
+
+### 8.2 Kafka Topic Initialization Logic (`internal/events/topic.go`)
+
+Kafka topics are provisioned idempotently before producers or consumers start.
+
+#### Interface Contracts & Models
+
+```go
+// TopicSpecification describes a Kafka topic to be initialized.
+type TopicSpecification struct {
+    Topic             string
+    NumPartitions     int
+    ReplicationFactor int
+    ConfigEntries     map[string]string
+}
+
+// TopicAdmin defines the minimal administrative contract for topic creation.
+type TopicAdmin interface {
+    CreateTopics(ctx context.Context, req *kafka.CreateTopicsRequest) (*kafka.CreateTopicsResponse, error)
+}
+
+// TopicInitializer coordinates idempotent topic creation and validation.
+type TopicInitializer struct {
+    admin  TopicAdmin
+    addr   net.Addr
+    logger *slog.Logger
+}
+```
+
+#### Administrative Helper Functions
+
+- `EnsureTopic(ctx context.Context, spec TopicSpecification) error`: Idempotently verifies or creates the topic on the Kafka cluster, safely handling `kafka.TopicAlreadyExists`.
+- `EnsureTopics(ctx context.Context, specs ...TopicSpecification) error`: Batch creation helper for multi-topic provisioning.
+- `EnsureTopicExists(ctx, brokers, topic, partitions, replicationFactor) error`: Top-level initialization entrypoint.
+- `InitDefaultTopic(ctx context.Context, brokers []string) error`: Convenience helper initializing `DefaultTopic` (`"experiment-events"`) with default single partition and replication factor.
+
+---
+
+### 8.3 Kafka Event Consumer (`internal/events/consumer.go`)
 
 The background event logger consumer reads asynchronous domain events from the `experiment-events` topic using Kafka consumer groups and outputs structured, human-readable audit logs to the console and logger.
 

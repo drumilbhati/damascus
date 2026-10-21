@@ -265,7 +265,7 @@ func (ec *EventConsumer) logEvent(event DomainEvent, partition int, offset int64
 	}
 
 	switch event.EventType {
-	case EventSafetyStopTriggered, EventExperimentAborted:
+	case EventSafetyStopTriggered, EventExperimentAborted, EventThresholdBreached, EventExperimentStopped:
 		ec.logger.Warn(fmt.Sprintf("ALERT: %s", event.EventType), attrs...)
 	default:
 		ec.logger.Info(fmt.Sprintf("EVENT: %s", event.EventType), attrs...)
@@ -304,16 +304,20 @@ func FormatAuditLog(event DomainEvent, partition int, offset int64) string {
 
 	icon := "ℹ️ "
 	switch event.EventType {
-	case EventSafetyStopTriggered:
+	case EventSafetyStopTriggered, EventThresholdBreached:
 		icon = "🚨"
 	case EventExperimentAborted:
 		icon = "❌"
-	case EventExperimentCompleted:
+	case EventExperimentCompleted, EventCompleted:
 		icon = "✅"
 	case EventExperimentStarted:
 		icon = "🚀"
-	case EventLoadStepChanged:
+	case EventLoadStepChanged, EventLoadChanged:
 		icon = "📈"
+	case EventMetricSnapshot:
+		icon = "📊"
+	case EventExperimentStopped:
+		icon = "⏹️ "
 	}
 
 	payloadJSON := "{}"
@@ -343,4 +347,15 @@ func FormatAuditLog(event DomainEvent, partition int, offset int64) string {
 		offset,
 		cleanPayload,
 	)
+}
+
+// FormatEventAuditLog formats an Event envelope into a concise, human-readable console audit log line.
+func FormatEventAuditLog(event Event, partition int, offset int64) string {
+	domainEvt, _ := event.ToDomainEvent()
+	line := FormatAuditLog(domainEvt, partition, offset)
+	if len(event.Payload) > 0 && domainEvt.Payload == nil {
+		cleanPayload := sanitizeLogField(string(event.Payload))
+		line = strings.Replace(line, "PAYLOAD={}", "PAYLOAD="+cleanPayload, 1)
+	}
+	return line
 }
