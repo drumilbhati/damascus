@@ -1035,6 +1035,14 @@ CREATE TABLE IF NOT EXISTS observations (
     memory_utilization DOUBLE PRECISION NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS safety_events (
+    id SERIAL PRIMARY KEY,
+    experiment_id VARCHAR(64) NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
+    event_type VARCHAR(64) NOT NULL,
+    reason TEXT NOT NULL,
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS reports (
     experiment_id VARCHAR(64) PRIMARY KEY REFERENCES experiments(id) ON DELETE CASCADE,
     target_service VARCHAR(128) NOT NULL,
