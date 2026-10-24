@@ -396,6 +396,16 @@ type SafetyController interface {
 type CapacityAnalyzer interface {
 	Analyze(observations []capacity.Observation, policy safety.SafetyPolicy) capacity.CapacityResult
 }
+```
+
+The deterministic implementation `Analyzer` in `internal/capacity/analyzer.go` computes:
+- **`MaximumTestedRate`**: Highest load rate (RPS) attempted during the experiment.
+- **`MaximumSustainableRate`**: Highest rate meeting all SLA criteria (`P95 <= policy.MaxP95LatencyMs` and `error_rate <= policy.MaxErrorRate`).
+- **`DegradationRate`**: Knee point where latency slope ($\Delta \text{Latency} / \Delta \text{LoadRate}$) increases by $> 50\%$ relative to the preceding slope.
+- **`SafetyBoundaryRate`**: Lowest load rate where an SLA breach occurred, or maximum sustainable rate if no breach occurred.
+- **`RecoveryTimeSec`**: Duration from the start of post-stress zero-load conditions until telemetry recovers within SLA limits.
+
+```go
 
 // ReportEngine builds structured JSON and rendered HTML reports
 type ReportEngine interface {
