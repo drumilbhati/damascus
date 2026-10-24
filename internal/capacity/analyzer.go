@@ -128,8 +128,14 @@ func (a *Analyzer) Analyze(observations []Observation, policy safety.SafetyPolic
 	// 4. Compute DegradationRate (latency knee point where slope spikes > 50%)
 	degradationRate := calculateDegradationRate(sortedTiers)
 
-	// 5. Compute RecoveryTimeSec (optional duration observed post-stress at 0 load rate until P95 drops to SLA)
-	recoveryTimeSec := calculateRecoveryTime(observations, policy)
+	// 5. Compute RecoveryTimeSec (optional duration observed post-stress at 0 load rate until metrics satisfy SLA)
+	// Sort a copy of observations chronologically to preserve caller's slice order
+	obsCopy := make([]Observation, len(observations))
+	copy(obsCopy, observations)
+	sort.Slice(obsCopy, func(i, j int) bool {
+		return obsCopy[i].Timestamp.Before(obsCopy[j].Timestamp)
+	})
+	recoveryTimeSec := calculateRecoveryTime(obsCopy, policy)
 
 	return CapacityResult{
 		MaximumTestedRate:      maxTestedRate,
