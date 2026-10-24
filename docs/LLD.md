@@ -285,7 +285,7 @@ import "time"
 
 type Observation struct {
 	Timestamp         time.Time `json:"timestamp"`
-	LoadRate          int       `json:"load_rate"`
+	LoadRate          float64   `json:"load_rate"`
 	P95LatencyMs      float64   `json:"p95_latency_ms"`
 	ErrorRate         float64   `json:"error_rate"`
 	Availability      float64   `json:"availability"`
@@ -294,25 +294,25 @@ type Observation struct {
 }
 
 type CapacityResult struct {
+	MaximumTestedRate      int `json:"maximum_tested_rate"`
+	MaximumSustainableRate int `json:"maximum_sustainable_rate"`
+	DegradationRate        int `json:"degradation_rate"`
+	SafetyBoundaryRate     int `json:"safety_boundary_rate"`
+	RecoveryTimeSec        int `json:"recovery_time_sec"`
+}
+
+type ExperimentReport struct {
+	ExperimentID           string        `json:"experiment_id"`
+	TargetService          string        `json:"target_service"`
+	CriticalityScore       float64       `json:"criticality_score"`
 	MaximumTestedRate      int           `json:"maximum_tested_rate"`
 	MaximumSustainableRate int           `json:"maximum_sustainable_rate"`
 	DegradationRate        int           `json:"degradation_rate"`
 	SafetyBoundaryRate     int           `json:"safety_boundary_rate"`
-	RecoveryTime           time.Duration `json:"recovery_time"`
-}
-
-type ExperimentReport struct {
-	ExperimentID           string         `json:"experiment_id"`
-	TargetService          string         `json:"target_service"`
-	CriticalityScore       float64        `json:"criticality_score"`
-	MaximumTestedRate      int            `json:"maximum_tested_rate"`
-	MaximumSustainableRate int            `json:"maximum_sustainable_rate"`
-	DegradationRate        int            `json:"degradation_rate"`
-	SafetyBoundaryRate     int            `json:"safety_boundary_rate"`
-	RecoveryTime           time.Duration  `json:"recovery_time"`
-	Observations           []Observation  `json:"observations"`
-	Recommendations        []string       `json:"recommendations"`
-	GeneratedAt            time.Time      `json:"generated_at"`
+	RecoveryTimeSec        int           `json:"recovery_time_sec"`
+	Observations           []Observation `json:"observations"`
+	Recommendations        []string      `json:"recommendations"`
+	GeneratedAt            time.Time     `json:"generated_at"`
 }
 ```
 
@@ -396,6 +396,16 @@ type SafetyController interface {
 type CapacityAnalyzer interface {
 	Analyze(observations []capacity.Observation, policy safety.SafetyPolicy) capacity.CapacityResult
 }
+```
+
+The deterministic implementation `Analyzer` in `internal/capacity/analyzer.go` computes:
+- **`MaximumTestedRate`**: Highest load rate (RPS) attempted during the experiment.
+- **`MaximumSustainableRate`**: Highest rate meeting all SLA criteria: `P95 <= policy.MaxP95LatencyMs`, `error_rate <= policy.MaxErrorRate`, and `availability >= policy.MinAvailability` (thresholds $\le 0$ disable their corresponding check).
+- **`DegradationRate`**: Knee point where latency slope ($\Delta \text{Latency} / \Delta \text{LoadRate}$) increases by $> 50\%$ relative to the preceding slope, or where the preceding slope was zero or negative and the current slope is positive.
+- **`SafetyBoundaryRate`**: Lowest load rate where an SLA breach occurred, or maximum sustainable rate if no breach occurred.
+- **`RecoveryTimeSec`**: Duration from the start of post-stress zero-load conditions until telemetry recovers within SLA limits.
+
+```go
 
 // ReportEngine builds structured JSON and rendered HTML reports
 type ReportEngine interface {
