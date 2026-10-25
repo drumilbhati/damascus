@@ -3,7 +3,9 @@ module damascus
 go 1.26.4
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/google/uuid v1.6.0
+	github.com/lib/pq v1.12.3
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/common v0.70.1
 	github.com/segmentio/kafka-go v0.4.51
