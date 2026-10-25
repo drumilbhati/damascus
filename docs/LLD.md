@@ -1018,6 +1018,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     max_p95_latency_ms DOUBLE PRECISION NOT NULL,
     max_error_rate DOUBLE PRECISION NOT NULL,
     min_availability DOUBLE PRECISION NOT NULL,
+    recovery_window_sec INT NOT NULL DEFAULT 0,
     stop_reason TEXT,
     started_at TIMESTAMP WITH TIME ZONE,
     ended_at TIMESTAMP WITH TIME ZONE,
@@ -1066,6 +1067,30 @@ CREATE TABLE IF NOT EXISTS reports (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+### 9.1 PostgreSQL Experiment Repository (`PostgresExperimentRepository`)
+
+The `PostgresExperimentRepository` in `internal/storage/postgres.go` implements the `experiment.ExperimentRepository` interface:
+
+```go
+type PostgresExperimentRepository struct {
+	db DBTX
+}
+
+func NewPostgresExperimentRepository(db DBTX) *PostgresExperimentRepository
+```
+
+#### CRUD Methods
+- **`Create(ctx context.Context, exp *experiment.Experiment) error`**: Inserts a new experiment record into `experiments` with all configuration parameters, test type, initial state (`CREATED`), and timestamps.
+- **`GetByID(ctx context.Context, id string) (*experiment.Experiment, error)`**: Retrieves experiment metadata by primary key. Returns `nil, nil` when not found.
+- **`List(ctx context.Context) ([]experiment.Experiment, error)`**: Queries all experiments ordered by `created_at DESC`.
+- **`UpdateState(ctx context.Context, id string, state experiment.ExperimentState, stopReason string) error`**: Updates the experiment lifecycle state and stop reason. Automatically sets `started_at` when entering `RUNNING` and `ended_at` when entering terminal states (`COMPLETED`, `ABORTED`). Returns `ErrNotFound` if the experiment ID does not exist.
+- **`SaveObservation(ctx context.Context, expID string, obs capacity.Observation) error`**: Appends real-time RED metric observations into `observations`.
+- **`GetObservations(ctx context.Context, expID string) ([]capacity.Observation, error)`**: Retrieves all observations for an experiment in ascending chronological order (`timestamp ASC, id ASC`).
+- **`SaveReport(ctx context.Context, report *capacity.ExperimentReport) error`**: Persists the compiled capacity analysis report with `ON CONFLICT (experiment_id) DO UPDATE` semantics and stores the full JSON representation in `report_data`.
+- **`GetReport(ctx context.Context, expID string) (*capacity.ExperimentReport, error)`**: Loads and deserializes the experiment report JSON and top-level fields. Returns `nil, nil` when not found.
+- **`SaveServiceScores(ctx context.Context, expID string, scores []graph.ServiceScore) error`**: Persists criticality scores and JSON diagnostic reasons into `service_scores`.
+- **`GetServiceScores(ctx context.Context, expID string) ([]graph.ServiceScore, error)`**: Retrieves calculated service scores for an experiment ordered by `criticality_score DESC`.
 
 ---
 

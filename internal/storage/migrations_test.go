@@ -31,7 +31,10 @@ func readMigrationFile(t *testing.T, filename string) string {
 
 // TestMigrationFilesExist ensures both up and down migration files are present.
 func TestMigrationFilesExist(t *testing.T) {
-	files := []string{"000001_init_schema.up.sql", "000001_init_schema.down.sql"}
+	files := []string{
+		"000001_init_schema.up.sql", "000001_init_schema.down.sql",
+		"000002_add_recovery_window_sec.up.sql", "000002_add_recovery_window_sec.down.sql",
+	}
 	for _, f := range files {
 		path := filepath.Join(getMigrationsDir(t), f)
 		stat, err := os.Stat(path)
@@ -253,5 +256,20 @@ func TestCascadeConstraints(t *testing.T) {
 		if !re.MatchString(upSQL) {
 			t.Errorf("table %s should specify ON DELETE CASCADE on experiments(id) foreign key", tbl)
 		}
+	}
+}
+
+// TestMigration_RecoveryWindowSec validates the 000002 migration that adds and reverts recovery_window_sec.
+func TestMigration_RecoveryWindowSec(t *testing.T) {
+	upSQL := readMigrationFile(t, "000002_add_recovery_window_sec.up.sql")
+	pattern := `(?i)ALTER\s+TABLE\s+experiments\s+ADD\s+COLUMN\s+(IF\s+NOT\s+EXISTS\s+)?recovery_window_sec\s+INT`
+	if matched, _ := regexp.MatchString(pattern, upSQL); !matched {
+		t.Errorf("expected recovery_window_sec column migration in 000002 up migration")
+	}
+
+	downSQL := readMigrationFile(t, "000002_add_recovery_window_sec.down.sql")
+	downPattern := `(?i)ALTER\s+TABLE\s+experiments\s+DROP\s+COLUMN\s+(IF\s+EXISTS\s+)?recovery_window_sec`
+	if matched, _ := regexp.MatchString(downPattern, downSQL); !matched {
+		t.Errorf("expected recovery_window_sec column drop in 000002 down migration")
 	}
 }
