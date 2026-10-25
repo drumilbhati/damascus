@@ -97,12 +97,13 @@ func (r *PostgresExperimentRepository) Create(ctx context.Context, exp *experime
 			max_p95_latency_ms,
 			max_error_rate,
 			min_availability,
+			recovery_window_sec,
 			stop_reason,
 			started_at,
 			ended_at,
 			created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
 		)`
 
 	_, err := r.db.ExecContext(ctx, query,
@@ -118,6 +119,7 @@ func (r *PostgresExperimentRepository) Create(ctx context.Context, exp *experime
 		exp.Config.MaxP95LatencyMs,
 		exp.Config.MaxErrorRatePercent,
 		exp.Config.MinAvailabilityPct,
+		exp.Config.RecoveryWindowSec,
 		stopReasonVal,
 		startedAtVal,
 		endedAtVal,
@@ -150,6 +152,7 @@ func (r *PostgresExperimentRepository) GetByID(ctx context.Context, id string) (
 			max_p95_latency_ms,
 			max_error_rate,
 			min_availability,
+			recovery_window_sec,
 			stop_reason,
 			started_at,
 			ended_at,
@@ -180,6 +183,7 @@ func (r *PostgresExperimentRepository) GetByID(ctx context.Context, id string) (
 		&exp.Config.MaxP95LatencyMs,
 		&exp.Config.MaxErrorRatePercent,
 		&exp.Config.MinAvailabilityPct,
+		&exp.Config.RecoveryWindowSec,
 		&stopReason,
 		&startedAt,
 		&endedAt,
@@ -225,6 +229,7 @@ func (r *PostgresExperimentRepository) List(ctx context.Context) ([]experiment.E
 			max_p95_latency_ms,
 			max_error_rate,
 			min_availability,
+			recovery_window_sec,
 			stop_reason,
 			started_at,
 			ended_at,
@@ -262,6 +267,7 @@ func (r *PostgresExperimentRepository) List(ctx context.Context) ([]experiment.E
 			&exp.Config.MaxP95LatencyMs,
 			&exp.Config.MaxErrorRatePercent,
 			&exp.Config.MinAvailabilityPct,
+			&exp.Config.RecoveryWindowSec,
 			&stopReason,
 			&startedAt,
 			&endedAt,

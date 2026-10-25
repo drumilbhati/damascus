@@ -1018,6 +1018,7 @@ CREATE TABLE IF NOT EXISTS experiments (
     max_p95_latency_ms DOUBLE PRECISION NOT NULL,
     max_error_rate DOUBLE PRECISION NOT NULL,
     min_availability DOUBLE PRECISION NOT NULL,
+    recovery_window_sec INT NOT NULL DEFAULT 0,
     stop_reason TEXT,
     started_at TIMESTAMP WITH TIME ZONE,
     ended_at TIMESTAMP WITH TIME ZONE,
