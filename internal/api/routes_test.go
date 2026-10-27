@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -122,7 +123,7 @@ func TestRouter_Integration(t *testing.T) {
 		}
 	})
 
-	t.Run("404 on unknown endpoint", func(t *testing.T) {
+	t.Run("404 on unknown endpoint returns JSON ErrorResponse", func(t *testing.T) {
 		resp, err := client.Get(ts.URL + "/api/unknown")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -132,22 +133,59 @@ func TestRouter_Integration(t *testing.T) {
 		if resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("expected 404, got %d", resp.StatusCode)
 		}
+		if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("expected application/json, got %s", ct)
+		}
+		var errResp ErrorResponse
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+			t.Fatalf("failed to decode error response: %v", err)
+		}
+		if errResp.Error != "route not found" {
+			t.Errorf("expected 'route not found', got %s", errResp.Error)
+		}
+	})
+
+	t.Run("405 on unsupported method returns JSON ErrorResponse", func(t *testing.T) {
+		req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/api/experiments", nil)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusMethodNotAllowed {
+			t.Fatalf("expected 405, got %d", resp.StatusCode)
+		}
+		if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+			t.Errorf("expected application/json, got %s", ct)
+		}
+		var errResp ErrorResponse
+		if err := json.NewDecoder(resp.Body).Decode(&errResp); err != nil {
+			t.Fatalf("failed to decode error response: %v", err)
+		}
+		if errResp.Error != "method not allowed" {
+			t.Errorf("expected 'method not allowed', got %s", errResp.Error)
+		}
 	})
 }
 
-func TestRouter_PanicRecovery(t *testing.T) {
-	// Custom handler that deliberately panics
-	panickyHandler := &Handler{}
+func TestRouter_PanicRecoveryWithLogging(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /panic", func(w http.ResponseWriter, r *http.Request) {
 		panic("simulated critical crash")
 	})
 
-	recovered := recoveryMiddleware(nil, mux)
-	ts := httptest.NewServer(recovered)
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, nil))
+
+	// Recreate middleware hierarchy: logging wrapping recovery
+	handler := jsonResponseMiddleware(mux)
+	handler = recoveryMiddleware(logger, handler)
+	handler = loggingMiddleware(logger, handler)
+
+	ts := httptest.NewServer(handler)
 	defer ts.Close()
 
-	_ = panickyHandler
 	resp, err := ts.Client().Get(ts.URL + "/panic")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
@@ -164,5 +202,11 @@ func TestRouter_PanicRecovery(t *testing.T) {
 	}
 	if errResp.Error != "internal server error" {
 		t.Errorf("unexpected error text: %s", errResp.Error)
+	}
+
+	// Verify logging recorded status 500
+	logOutput := logBuf.String()
+	if !bytes.Contains(logBuf.Bytes(), []byte("status=500")) {
+		t.Errorf("expected loggingMiddleware to log status 500, got logs: %s", logOutput)
 	}
 }

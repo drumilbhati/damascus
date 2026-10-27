@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -243,6 +244,22 @@ func TestHandler_CreateExperiment(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("body exceeding max limit returns 413", func(t *testing.T) {
+		svc := &mockExperimentService{}
+		h := NewHandler(svc, nil, nil)
+
+		// Create > 1 MB payload with valid JSON syntax so decoder reaches limit
+		largeJSON := `{"target_service":"a","target_url":"http://a","type":"ramp","padding":"` + strings.Repeat("x", 2<<20) + `"}`
+		req := httptest.NewRequest(http.MethodPost, "/api/experiments", strings.NewReader(largeJSON))
+		rec := httptest.NewRecorder()
+
+		h.CreateExperiment(rec, req)
+
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Fatalf("expected status 413, got %d. Body: %s", rec.Code, rec.Body.String())
+		}
+	})
 }
 
 func TestHandler_StartExperiment(t *testing.T) {
@@ -396,6 +413,12 @@ func TestHandler_StopExperiment(t *testing.T) {
 			},
 			wantStatus: http.StatusConflict,
 		},
+		{
+			name:       "malformed json returns 400",
+			expID:      "exp-123",
+			body:       "{invalid-json-body",
+			wantStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {
@@ -404,8 +427,13 @@ func TestHandler_StopExperiment(t *testing.T) {
 			h := NewHandler(svc, nil, nil)
 
 			var body []byte
-			if tt.body != nil {
-				body, _ = json.Marshal(tt.body)
+			switch v := tt.body.(type) {
+			case string:
+				body = []byte(v)
+			default:
+				if tt.body != nil {
+					body, _ = json.Marshal(tt.body)
+				}
 			}
 
 			req := httptest.NewRequest(http.MethodPost, "/api/experiments/"+tt.expID+"/stop", bytes.NewReader(body))
@@ -574,6 +602,18 @@ func TestHandler_GetExperimentStatus(t *testing.T) {
 			t.Errorf("expected latest observation rate 75, got %v", snapshot.RequestRate)
 		}
 	})
+
+	t.Run("returns 500 when neither repo nor service is configured", func(t *testing.T) {
+		h := NewHandler(nil, nil, nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/experiments/exp-123/status", nil)
+		req.SetPathValue("id", "exp-123")
+		rec := httptest.NewRecorder()
+		h.GetExperimentStatus(rec, req)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500, got %d", rec.Code)
+		}
+	})
 }
 
 func TestHandler_GetDependencies(t *testing.T) {
@@ -670,7 +710,7 @@ func TestHandler_GetExperimentReport(t *testing.T) {
 }
 
 func TestHandler_GetHealth(t *testing.T) {
-	t.Run("default health UP", func(t *testing.T) {
+	t.Run("default health without checker reports UNKNOWN for dependencies", func(t *testing.T) {
 		h := NewHandler(nil, nil, nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 		rec := httptest.NewRecorder()
@@ -679,12 +719,17 @@ func TestHandler_GetHealth(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d", rec.Code)
 		}
+		var resp map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+		if resp["jaeger"] != "UNKNOWN" || resp["prometheus"] != "UNKNOWN" {
+			t.Errorf("expected UNKNOWN for unconfigured dependencies, got: %+v", resp)
+		}
 	})
 
-	t.Run("checker health DOWN", func(t *testing.T) {
+	t.Run("checker health DOWN with error", func(t *testing.T) {
 		checker := &mockObservabilityChecker{
 			checkHealthFn: func(ctx context.Context) (map[string]string, error) {
-				return map[string]string{"prometheus": "UNREACHABLE"}, errors.New("connection failed")
+				return map[string]string{"status": "UP", "prometheus": "UNREACHABLE"}, errors.New("connection failed: sensitive-internal-ip:9090")
 			},
 		}
 		h := NewHandler(nil, nil, nil, WithObservabilityChecker(checker))
@@ -694,6 +739,15 @@ func TestHandler_GetHealth(t *testing.T) {
 
 		if rec.Code != http.StatusServiceUnavailable {
 			t.Fatalf("expected 503, got %d", rec.Code)
+		}
+		var resp map[string]any
+		_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+		if resp["status"] != "DOWN" {
+			t.Errorf("expected DOWN status, got %v", resp["status"])
+		}
+		// Verify raw error string is sanitized
+		if strings.Contains(rec.Body.String(), "sensitive-internal-ip") {
+			t.Errorf("sensitive error details leaked in response: %s", rec.Body.String())
 		}
 	})
 }

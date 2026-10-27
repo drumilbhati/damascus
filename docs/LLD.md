@@ -1098,10 +1098,10 @@ func NewPostgresExperimentRepository(db DBTX) *PostgresExperimentRepository
 
 | Method | Endpoint | Description | Request Body | Response Body |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/api/health` | Verify DAMASCUS & observability status | None | `{"status": "UP", "jaeger": "CONNECTED", "prometheus": "CONNECTED"}` |
+| `GET` | `/api/health` | Verify DAMASCUS & observability status | None | `{"status": "UP", "jaeger": "UNKNOWN", "prometheus": "UNKNOWN"}` |
 | `GET` | `/api/dependencies` | Fetch trace dependency graph & criticality scores | None | `{"graph": {...}, "scores": [...]}` |
 | `POST` | `/api/experiments` | Create a new experiment configuration | `CreateExperimentDTO` | `Experiment` object |
-| `POST` | `/api/experiments/{id}/start` | Trigger execution of planned experiment | None | `{"status": "RUNNING"}` |
+| `POST` | `/api/experiments/{id}/start` | Trigger execution of planned experiment | Optional: `StartExperimentDTO` (`{"plan": {...}}`) or top-level `LoadPlan` fields (defaults to experiment config when omitted) | `{"status": "RUNNING"}` |
 | `POST` | `/api/experiments/{id}/stop` | Manual emergency stop | `{"reason": "string"}` | `{"status": "STOPPING"}` |
 | `GET` | `/api/experiments` | List all historical experiments | None | `[]Experiment` |
 | `GET` | `/api/experiments/{id}` | Retrieve experiment metadata | None | `Experiment` object |
@@ -1123,6 +1123,10 @@ type CreateExperimentDTO struct {
 	TargetURL     string                      `json:"target_url"`
 	Type          experiment.ExperimentType   `json:"type"`
 	Config        experiment.ExperimentConfig `json:"config"`
+}
+
+type StartExperimentDTO struct {
+	Plan *stress.LoadPlan `json:"plan,omitempty"`
 }
 
 type StopExperimentDTO struct {

@@ -45,11 +45,14 @@ func NewRouter(h *Handler, opts ...RouterOption) http.Handler {
 	mux.HandleFunc("GET /api/experiments/{id}/report", h.GetExperimentReport)
 	mux.HandleFunc("GET /api/health", h.GetHealth)
 
-	// Apply middleware chain
+	// Middleware execution hierarchy:
+	// loggingMiddleware (outermost) wraps recoveryMiddleware, ensuring request duration
+	// and HTTP 500 status are accurately logged when recoveryMiddleware recovers from a panic.
+	// jsonResponseMiddleware (innermost) ensures router-level 404/405 errors are emitted as JSON.
 	var handler http.Handler = mux
-	handler = jsonContentTypeMiddleware(handler)
-	handler = loggingMiddleware(cfg.logger, handler)
+	handler = jsonResponseMiddleware(handler)
 	handler = recoveryMiddleware(cfg.logger, handler)
+	handler = loggingMiddleware(cfg.logger, handler)
 
 	return handler
 }
@@ -94,11 +97,12 @@ func loggingMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
 	})
 }
 
-// jsonContentTypeMiddleware guarantees that all outgoing API responses default to application/json.
-func jsonContentTypeMiddleware(next http.Handler) http.Handler {
+// jsonResponseMiddleware intercepts ServeMux-generated 404/405 plain text responses,
+// transforming them into JSON ErrorResponse payloads. It avoids setting JSON headers on redirects.
+func jsonResponseMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		next.ServeHTTP(w, r)
+		jw := &jsonResponseWrapper{ResponseWriter: w, statusCode: http.StatusOK}
+		next.ServeHTTP(jw, r)
 	})
 }
 
@@ -110,4 +114,48 @@ type statusResponseWriter struct {
 func (rw *statusResponseWriter) WriteHeader(code int) {
 	rw.statusCode = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+type jsonResponseWrapper struct {
+	http.ResponseWriter
+	statusCode    int
+	isIntercepted bool
+}
+
+func (jw *jsonResponseWrapper) WriteHeader(code int) {
+	jw.statusCode = code
+
+	// Avoid setting application/json header on HTTP redirect responses (3xx)
+	if code >= 300 && code < 400 {
+		jw.ResponseWriter.WriteHeader(code)
+		return
+	}
+
+	// Intercept ServeMux default plain-text 404/405 responses
+	if (code == http.StatusNotFound || code == http.StatusMethodNotAllowed) && jw.Header().Get("Content-Type") != "application/json" {
+		jw.isIntercepted = true
+		jw.Header().Set("Content-Type", "application/json")
+		jw.ResponseWriter.WriteHeader(code)
+		var errMsg string
+		if code == http.StatusNotFound {
+			errMsg = "route not found"
+		} else {
+			errMsg = "method not allowed"
+		}
+		_ = json.NewEncoder(jw.ResponseWriter).Encode(ErrorResponse{Error: errMsg})
+		return
+	}
+
+	if jw.Header().Get("Content-Type") == "" {
+		jw.Header().Set("Content-Type", "application/json")
+	}
+	jw.ResponseWriter.WriteHeader(code)
+}
+
+func (jw *jsonResponseWrapper) Write(b []byte) (int, error) {
+	if jw.isIntercepted {
+		// Suppress raw plain-text payload from default router handlers
+		return len(b), nil
+	}
+	return jw.ResponseWriter.Write(b)
 }

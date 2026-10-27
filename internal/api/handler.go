@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,9 +14,30 @@ import (
 	"damascus/internal/capacity"
 	"damascus/internal/experiment"
 	"damascus/internal/graph"
+	"damascus/internal/storage"
 	"damascus/internal/stress"
 	"damascus/internal/watcher"
 )
+
+// maxRequestBodyBytes limits request body sizes to prevent memory exhaustion (DoS).
+const maxRequestBodyBytes = 1 << 20 // 1 MB
+
+// Common sentinel errors for API error classification.
+var (
+	ErrNotFound   = errors.New("entity not found")
+	ErrConflict   = errors.New("state conflict")
+	ErrBadRequest = errors.New("invalid request")
+)
+
+// ClientError represents a client-side error with a specific HTTP status code.
+type ClientError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *ClientError) Error() string {
+	return e.Message
+}
 
 // ExperimentService defines the control operations for experiments.
 type ExperimentService interface {
@@ -56,6 +79,11 @@ type CreateExperimentDTO struct {
 	Config        experiment.ExperimentConfig `json:"config"`
 }
 
+// StartExperimentDTO defines an optional payload for specifying or overriding the traffic plan.
+type StartExperimentDTO struct {
+	Plan *stress.LoadPlan `json:"plan,omitempty"`
+}
+
 // StopExperimentDTO defines the payload for manually stopping an active experiment.
 type StopExperimentDTO struct {
 	Reason string `json:"reason,omitempty"`
@@ -84,6 +112,7 @@ type Handler struct {
 	graphAnalyzer    GraphAnalyzer
 	snapshotProvider SnapshotProvider
 	checker          ObservabilityChecker
+	logger           *slog.Logger
 }
 
 // HandlerOption configures dependencies for Handler.
@@ -103,17 +132,80 @@ func WithObservabilityChecker(checker ObservabilityChecker) HandlerOption {
 	}
 }
 
+// WithHandlerLogger configures the logger for Handler.
+func WithHandlerLogger(l *slog.Logger) HandlerOption {
+	return func(h *Handler) {
+		if l != nil {
+			h.logger = l
+		}
+	}
+}
+
 // NewHandler initializes a new Handler.
 func NewHandler(service ExperimentService, repo ExperimentRepository, graphAnalyzer GraphAnalyzer, opts ...HandlerOption) *Handler {
 	h := &Handler{
 		service:       service,
 		repo:          repo,
 		graphAnalyzer: graphAnalyzer,
+		logger:        slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(h)
 	}
 	return h
+}
+
+// isMaxBytesError checks if the error was caused by http.MaxBytesReader.
+func isMaxBytesError(err error) bool {
+	var maxBytesErr *http.MaxBytesError
+	return errors.As(err, &maxBytesErr)
+}
+
+// handleServiceError categorizes domain errors into appropriate HTTP status codes,
+// logging unclassified failures and returning generic 500 responses.
+func (h *Handler) handleServiceError(w http.ResponseWriter, err error, action string) {
+	if err == nil {
+		return
+	}
+	var clientErr *ClientError
+	if errors.As(err, &clientErr) {
+		h.writeError(w, clientErr.StatusCode, clientErr.Message)
+		return
+	}
+	if errors.Is(err, ErrNotFound) || errors.Is(err, storage.ErrNotFound) {
+		h.writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if errors.Is(err, ErrConflict) || errors.Is(err, experiment.ErrInvalidTransition) {
+		h.writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if errors.Is(err, ErrBadRequest) {
+		h.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "not found") || strings.Contains(errMsg, "was not found") {
+		h.writeError(w, http.StatusNotFound, errMsg)
+		return
+	}
+	if strings.Contains(errMsg, "already running") || strings.Contains(errMsg, "not in StateCreated") || strings.Contains(errMsg, "not actively running") {
+		h.writeError(w, http.StatusConflict, errMsg)
+		return
+	}
+	if strings.Contains(errMsg, "unsupported") || strings.Contains(errMsg, "must be provided") || strings.Contains(errMsg, "invalid") {
+		h.writeError(w, http.StatusBadRequest, errMsg)
+		return
+	}
+
+	if h.logger != nil {
+		h.logger.Error("internal service failure",
+			slog.String("action", action),
+			slog.Any("error", err),
+		)
+	}
+	h.writeError(w, http.StatusInternalServerError, "internal server error")
 }
 
 // CreateExperiment handles POST /api/experiments
@@ -123,8 +215,13 @@ func (h *Handler) CreateExperiment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	var dto CreateExperimentDTO
 	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		if isMaxBytesError(err) {
+			h.writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
+			return
+		}
 		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request payload: %v", err))
 		return
 	}
@@ -148,7 +245,7 @@ func (h *Handler) CreateExperiment(w http.ResponseWriter, r *http.Request) {
 
 	exp, err := h.service.CreateExperiment(r.Context(), dto.TargetService, dto.TargetURL, dto.Type, dto.Config)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, err.Error())
+		h.handleServiceError(w, err, "create_experiment")
 		return
 	}
 
@@ -178,7 +275,7 @@ func (h *Handler) StartExperiment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to retrieve experiment: %v", err))
+		h.handleServiceError(w, err, "get_experiment_for_start")
 		return
 	}
 	if exp == nil {
@@ -192,10 +289,14 @@ func (h *Handler) StartExperiment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var plan stress.LoadPlan
-	hasBody := r.Body != nil && r.ContentLength != 0
-	if hasBody {
+	if r.Body != nil && r.ContentLength != 0 {
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		bodyBytes, readErr := io.ReadAll(r.Body)
 		if readErr != nil {
+			if isMaxBytesError(readErr) {
+				h.writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
+				return
+			}
 			h.writeError(w, http.StatusBadRequest, fmt.Sprintf("failed to read request body: %v", readErr))
 			return
 		}
@@ -242,15 +343,7 @@ func (h *Handler) StartExperiment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.StartExperiment(r.Context(), id, plan); err != nil {
-		if strings.Contains(err.Error(), "was not found") {
-			h.writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		if strings.Contains(err.Error(), "already running") || strings.Contains(err.Error(), "not in StateCreated") {
-			h.writeError(w, http.StatusConflict, err.Error())
-			return
-		}
-		h.writeError(w, http.StatusInternalServerError, err.Error())
+		h.handleServiceError(w, err, "start_experiment")
 		return
 	}
 
@@ -272,22 +365,31 @@ func (h *Handler) StopExperiment(w http.ResponseWriter, r *http.Request) {
 
 	reason := "manual stop via API"
 	if r.Body != nil && r.ContentLength != 0 {
-		var dto StopExperimentDTO
-		if err := json.NewDecoder(r.Body).Decode(&dto); err == nil && strings.TrimSpace(dto.Reason) != "" {
-			reason = strings.TrimSpace(dto.Reason)
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
+		bodyBytes, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			if isMaxBytesError(readErr) {
+				h.writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds size limit")
+				return
+			}
+			h.writeError(w, http.StatusBadRequest, fmt.Sprintf("failed to read request body: %v", readErr))
+			return
+		}
+		trimmed := strings.TrimSpace(string(bodyBytes))
+		if len(trimmed) > 0 {
+			var dto StopExperimentDTO
+			if err := json.Unmarshal(bodyBytes, &dto); err != nil {
+				h.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request payload: %v", err))
+				return
+			}
+			if strings.TrimSpace(dto.Reason) != "" {
+				reason = strings.TrimSpace(dto.Reason)
+			}
 		}
 	}
 
 	if err := h.service.StopExperiment(r.Context(), id, reason); err != nil {
-		if strings.Contains(err.Error(), "not actively running") {
-			h.writeError(w, http.StatusConflict, err.Error())
-			return
-		}
-		if strings.Contains(err.Error(), "not found") {
-			h.writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		h.writeError(w, http.StatusInternalServerError, err.Error())
+		h.handleServiceError(w, err, "stop_experiment")
 		return
 	}
 
@@ -314,7 +416,7 @@ func (h *Handler) GetExperiment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to retrieve experiment: %v", err))
+		h.handleServiceError(w, err, "get_experiment")
 		return
 	}
 	if exp == nil {
@@ -334,7 +436,7 @@ func (h *Handler) ListExperiments(w http.ResponseWriter, r *http.Request) {
 
 	experiments, err := h.repo.List(r.Context())
 	if err != nil {
-		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list experiments: %v", err))
+		h.handleServiceError(w, err, "list_experiments")
 		return
 	}
 	if experiments == nil {
@@ -359,9 +461,13 @@ func (h *Handler) GetExperimentStatus(w http.ResponseWriter, r *http.Request) {
 		exp, err = h.repo.GetByID(r.Context(), id)
 	} else if h.service != nil {
 		exp, err = h.service.GetStatus(r.Context(), id)
+	} else {
+		h.writeError(w, http.StatusInternalServerError, "no experiment repository or service configured")
+		return
 	}
+
 	if err != nil {
-		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to verify experiment: %v", err))
+		h.handleServiceError(w, err, "get_experiment_status")
 		return
 	}
 	if exp == nil {
@@ -427,7 +533,7 @@ func (h *Handler) GetDependencies(w http.ResponseWriter, r *http.Request) {
 
 	depGraph, err := h.graphAnalyzer.BuildGraph(r.Context(), lookback)
 	if err != nil {
-		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to build dependency graph: %v", err))
+		h.handleServiceError(w, err, "build_graph")
 		return
 	}
 
@@ -458,7 +564,7 @@ func (h *Handler) GetExperimentReport(w http.ResponseWriter, r *http.Request) {
 	// Verify experiment exists first
 	exp, err := h.repo.GetByID(r.Context(), id)
 	if err != nil {
-		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to retrieve experiment: %v", err))
+		h.handleServiceError(w, err, "get_experiment_for_report")
 		return
 	}
 	if exp == nil {
@@ -468,7 +574,7 @@ func (h *Handler) GetExperimentReport(w http.ResponseWriter, r *http.Request) {
 
 	report, err := h.repo.GetReport(r.Context(), id)
 	if err != nil {
-		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to retrieve report: %v", err))
+		h.handleServiceError(w, err, "get_report")
 		return
 	}
 	if report == nil {
@@ -483,18 +589,22 @@ func (h *Handler) GetExperimentReport(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) GetHealth(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"status":     "UP",
-		"jaeger":     "CONNECTED",
-		"prometheus": "CONNECTED",
+		"jaeger":     "UNKNOWN",
+		"prometheus": "UNKNOWN",
 	}
 
 	if h.checker != nil {
 		healthStatus, err := h.checker.CheckHealth(r.Context())
-		if err != nil {
-			resp["status"] = "DOWN"
-			resp["errors"] = err.Error()
-		}
+		// Merge healthStatus before applying checker error status
 		for k, v := range healthStatus {
-			resp[k] = v
+			resp[k] = strings.TrimSpace(v)
+		}
+		if err != nil {
+			if h.logger != nil {
+				h.logger.Error("observability health check probe failed", slog.Any("error", err))
+			}
+			resp["status"] = "DOWN"
+			resp["errors"] = "observability stack health check failed"
 		}
 		if resp["status"] == "DOWN" {
 			h.writeJSON(w, http.StatusServiceUnavailable, resp)
@@ -508,10 +618,7 @@ func (h *Handler) GetHealth(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		// Log write error if needed
-		_ = err
-	}
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 func (h *Handler) writeError(w http.ResponseWriter, status int, message string) {
