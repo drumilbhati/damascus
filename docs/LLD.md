@@ -15,6 +15,7 @@
 8. [Kafka Event Backbone & Messaging Schema](#8-kafka-event-backbone--messaging-schema)
 9. [PostgreSQL Storage Schema (DDL)](#9-postgresql-storage-schema-ddl)
 10. [REST API Specification](#10-rest-api-specification)
+11. [Web Frontend Console Architecture](#11-web-frontend-console-architecture)
 
 ---
 
@@ -1196,3 +1197,38 @@ It wraps requests in an automatic middleware chain:
 1. **Panic Recovery**: Recovers from unhandled panics, logs the failure with structured attributes, and returns `500 Internal Server Error` in JSON format.
 2. **Structured Logging**: Emits method, path, HTTP response status code, and latency duration using `log/slog`.
 3. **JSON Content-Type**: Sets `Content-Type: application/json` on all outgoing responses.
+
+---
+
+## 11. Web Frontend Console Architecture
+
+The DAMASCUS Web Frontend Shell (`web/`) is built using **Vite + React + TypeScript + Tailwind CSS** with client-side routing and reactive data fetching.
+
+### 11.1 Component Hierarchy & Layout
+
+```
+App
+├── ThemeProvider (Dark / Light / System mode synced with localStorage & media queries)
+└── SWRConfig (Global API cache & error handling)
+    └── RouterProvider
+        └── AppLayout
+            ├── Navbar (Cluster health status, brand, theme toggle, external links)
+            ├── Sidebar (Collapsible navigation with active route highlights & badges)
+            └── Outlet (Routed Page Content)
+                ├── DashboardPage (Cluster health, active stress metrics, recent experiments)
+                ├── ExperimentsPage (Experiment directory, filtering, creation modal)
+                ├── ExperimentDetailPage (Live telemetry stream, start/stop actions)
+                ├── DependenciesPage (Trace dependency graph & criticality scores)
+                ├── ReportsPage (Capacity analysis, knee degradation & recovery reports)
+                └── NotFoundPage (Fallback 404 handler)
+```
+
+### 11.2 State Management & API Client
+
+- **`axios` Client**: Configured with `/api` proxy base URL, standardized JSON headers, and uniform error normalization.
+- **`swr` Polling Hooks**:
+  - `useHealth`: Polls control-plane health status (`/api/health`) every 15s.
+  - `useExperiments`: Auto-revalidates experiment list (`/api/experiments`) every 5s.
+  - `useExperimentStatus`: Fast 1s polling interval during active `RUNNING` state for live RED metrics.
+  - `useDependencies`: On-demand trace dependency graph fetching with configurable lookback windows.
+  - `useExperimentReport`: Caches completed capacity analysis reports.
