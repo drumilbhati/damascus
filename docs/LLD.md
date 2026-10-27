@@ -1107,3 +1107,88 @@ func NewPostgresExperimentRepository(db DBTX) *PostgresExperimentRepository
 | `GET` | `/api/experiments/{id}` | Retrieve experiment metadata | None | `Experiment` object |
 | `GET` | `/api/experiments/{id}/status` | Get live metrics stream snapshot | None | `MetricSnapshot` object |
 | `GET` | `/api/experiments/{id}/report` | Retrieve completed experiment report | None | `ExperimentReport` JSON |
+
+### 10.1 Data Transfer Objects (DTOs)
+
+```go
+package api
+
+import (
+	"damascus/internal/experiment"
+	"damascus/internal/graph"
+)
+
+type CreateExperimentDTO struct {
+	TargetService string                      `json:"target_service"`
+	TargetURL     string                      `json:"target_url"`
+	Type          experiment.ExperimentType   `json:"type"`
+	Config        experiment.ExperimentConfig `json:"config"`
+}
+
+type StopExperimentDTO struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+type DependenciesResponse struct {
+	Graph  *graph.DependencyGraph `json:"graph"`
+	Scores []graph.ServiceScore   `json:"scores"`
+}
+
+type StatusResponse struct {
+	Status string `json:"status"`
+}
+
+type ErrorResponse struct {
+	Error string `json:"error"`
+}
+```
+
+### 10.2 Go Interface Specifications
+
+```go
+package api
+
+import (
+	"context"
+	"damascus/internal/capacity"
+	"damascus/internal/experiment"
+	"damascus/internal/graph"
+	"damascus/internal/stress"
+	"damascus/internal/watcher"
+)
+
+// ExperimentService defines the control operations for experiments.
+type ExperimentService interface {
+	CreateExperiment(ctx context.Context, targetService, targetURL string, expType experiment.ExperimentType, config experiment.ExperimentConfig) (*experiment.Experiment, error)
+	StartExperiment(ctx context.Context, id string, plan stress.LoadPlan) error
+	StopExperiment(ctx context.Context, id, reason string) error
+	GetStatus(ctx context.Context, id string) (*experiment.Experiment, error)
+}
+
+// ExperimentRepository defines persistence operations needed by the API.
+type ExperimentRepository interface {
+	GetByID(ctx context.Context, id string) (*experiment.Experiment, error)
+	List(ctx context.Context) ([]experiment.Experiment, error)
+	GetReport(ctx context.Context, expID string) (*capacity.ExperimentReport, error)
+	GetObservations(ctx context.Context, expID string) ([]capacity.Observation, error)
+}
+
+// GraphAnalyzer defines the contract for microservice dependency mapping.
+type GraphAnalyzer interface {
+	BuildGraph(ctx context.Context, lookbackDuration int64) (*graph.DependencyGraph, error)
+	ScoreCriticality(g *graph.DependencyGraph) []graph.ServiceScore
+}
+
+// SnapshotProvider supplies real-time telemetry snapshots for an active experiment.
+type SnapshotProvider interface {
+	GetLatestSnapshot(ctx context.Context, expID string) (*watcher.MetricSnapshot, error)
+}
+```
+
+### 10.3 Router and Middleware Pipeline
+
+The router is instantiated via `NewRouter(h *Handler, opts ...RouterOption) http.Handler` using the standard library `net/http.ServeMux` with Go 1.22+ routing patterns.
+It wraps requests in an automatic middleware chain:
+1. **Panic Recovery**: Recovers from unhandled panics, logs the failure with structured attributes, and returns `500 Internal Server Error` in JSON format.
+2. **Structured Logging**: Emits method, path, HTTP response status code, and latency duration using `log/slog`.
+3. **JSON Content-Type**: Sets `Content-Type: application/json` on all outgoing responses.

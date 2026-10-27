@@ -1,0 +1,519 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"damascus/internal/capacity"
+	"damascus/internal/experiment"
+	"damascus/internal/graph"
+	"damascus/internal/stress"
+	"damascus/internal/watcher"
+)
+
+// ExperimentService defines the control operations for experiments.
+type ExperimentService interface {
+	CreateExperiment(ctx context.Context, targetService, targetURL string, expType experiment.ExperimentType, config experiment.ExperimentConfig) (*experiment.Experiment, error)
+	StartExperiment(ctx context.Context, id string, plan stress.LoadPlan) error
+	StopExperiment(ctx context.Context, id, reason string) error
+	GetStatus(ctx context.Context, id string) (*experiment.Experiment, error)
+}
+
+// ExperimentRepository defines persistence operations needed by the API.
+type ExperimentRepository interface {
+	GetByID(ctx context.Context, id string) (*experiment.Experiment, error)
+	List(ctx context.Context) ([]experiment.Experiment, error)
+	GetReport(ctx context.Context, expID string) (*capacity.ExperimentReport, error)
+	GetObservations(ctx context.Context, expID string) ([]capacity.Observation, error)
+}
+
+// GraphAnalyzer defines the contract for microservice dependency mapping.
+type GraphAnalyzer interface {
+	BuildGraph(ctx context.Context, lookbackDuration int64) (*graph.DependencyGraph, error)
+	ScoreCriticality(g *graph.DependencyGraph) []graph.ServiceScore
+}
+
+// SnapshotProvider supplies real-time telemetry snapshots for an active experiment.
+type SnapshotProvider interface {
+	GetLatestSnapshot(ctx context.Context, expID string) (*watcher.MetricSnapshot, error)
+}
+
+// ObservabilityChecker evaluates the connectivity of the observability stack.
+type ObservabilityChecker interface {
+	CheckHealth(ctx context.Context) (map[string]string, error)
+}
+
+// CreateExperimentDTO captures input parameters for defining a new chaos/stress experiment.
+type CreateExperimentDTO struct {
+	TargetService string                      `json:"target_service"`
+	TargetURL     string                      `json:"target_url"`
+	Type          experiment.ExperimentType   `json:"type"`
+	Config        experiment.ExperimentConfig `json:"config"`
+}
+
+// StopExperimentDTO defines the payload for manually stopping an active experiment.
+type StopExperimentDTO struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+// StatusResponse is a generic status response container.
+type StatusResponse struct {
+	Status string `json:"status"`
+}
+
+// DependenciesResponse wraps the microservice dependency topology graph and criticality scores.
+type DependenciesResponse struct {
+	Graph  *graph.DependencyGraph `json:"graph"`
+	Scores []graph.ServiceScore   `json:"scores"`
+}
+
+// ErrorResponse represents a standardized API error format.
+type ErrorResponse struct {
+	Error string `json:"error"`
+}
+
+// Handler orchestrates REST HTTP endpoints and delegates to domain services.
+type Handler struct {
+	service          ExperimentService
+	repo             ExperimentRepository
+	graphAnalyzer    GraphAnalyzer
+	snapshotProvider SnapshotProvider
+	checker          ObservabilityChecker
+}
+
+// HandlerOption configures dependencies for Handler.
+type HandlerOption func(*Handler)
+
+// WithSnapshotProvider injects a SnapshotProvider.
+func WithSnapshotProvider(sp SnapshotProvider) HandlerOption {
+	return func(h *Handler) {
+		h.snapshotProvider = sp
+	}
+}
+
+// WithObservabilityChecker injects an ObservabilityChecker.
+func WithObservabilityChecker(checker ObservabilityChecker) HandlerOption {
+	return func(h *Handler) {
+		h.checker = checker
+	}
+}
+
+// NewHandler initializes a new Handler.
+func NewHandler(service ExperimentService, repo ExperimentRepository, graphAnalyzer GraphAnalyzer, opts ...HandlerOption) *Handler {
+	h := &Handler{
+		service:       service,
+		repo:          repo,
+		graphAnalyzer: graphAnalyzer,
+	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
+}
+
+// CreateExperiment handles POST /api/experiments
+func (h *Handler) CreateExperiment(w http.ResponseWriter, r *http.Request) {
+	if h.service == nil {
+		h.writeError(w, http.StatusInternalServerError, "experiment service is not configured")
+		return
+	}
+
+	var dto CreateExperimentDTO
+	if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
+		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request payload: %v", err))
+		return
+	}
+
+	dto.TargetService = strings.TrimSpace(dto.TargetService)
+	dto.TargetURL = strings.TrimSpace(dto.TargetURL)
+	if dto.TargetService == "" || dto.TargetURL == "" {
+		h.writeError(w, http.StatusBadRequest, "target_service and target_url must be provided")
+		return
+	}
+
+	if dto.Type != experiment.ExperimentRamp && dto.Type != experiment.ExperimentStep {
+		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("unsupported experiment type %q; must be 'ramp' or 'step'", dto.Type))
+		return
+	}
+
+	if err := dto.Config.Validate(); err != nil {
+		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid experiment config: %v", err))
+		return
+	}
+
+	exp, err := h.service.CreateExperiment(r.Context(), dto.TargetService, dto.TargetURL, dto.Type, dto.Config)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	h.writeJSON(w, http.StatusCreated, exp)
+}
+
+// StartExperiment handles POST /api/experiments/{id}/start
+func (h *Handler) StartExperiment(w http.ResponseWriter, r *http.Request) {
+	if h.service == nil {
+		h.writeError(w, http.StatusInternalServerError, "experiment service is not configured")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		h.writeError(w, http.StatusBadRequest, "experiment id is required")
+		return
+	}
+
+	// Fetch experiment metadata first to validate existence or extract defaults
+	var exp *experiment.Experiment
+	var err error
+	if h.repo != nil {
+		exp, err = h.repo.GetByID(r.Context(), id)
+	} else {
+		exp, err = h.service.GetStatus(r.Context(), id)
+	}
+
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to retrieve experiment: %v", err))
+		return
+	}
+	if exp == nil {
+		h.writeError(w, http.StatusNotFound, fmt.Sprintf("experiment %s was not found", id))
+		return
+	}
+
+	if exp.State != experiment.StateCreated {
+		h.writeError(w, http.StatusConflict, fmt.Sprintf("experiment %s is in state %s; only CREATED experiments can be started", id, exp.State))
+		return
+	}
+
+	var plan stress.LoadPlan
+	hasBody := r.Body != nil && r.ContentLength != 0
+	if hasBody {
+		bodyBytes, readErr := io.ReadAll(r.Body)
+		if readErr != nil {
+			h.writeError(w, http.StatusBadRequest, fmt.Sprintf("failed to read request body: %v", readErr))
+			return
+		}
+		if len(strings.TrimSpace(string(bodyBytes))) > 0 {
+			var startDTO struct {
+				Plan *stress.LoadPlan `json:"plan"`
+				stress.LoadPlan
+			}
+			if unmarshalErr := json.Unmarshal(bodyBytes, &startDTO); unmarshalErr != nil {
+				h.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid request payload: %v", unmarshalErr))
+				return
+			}
+			if startDTO.Plan != nil {
+				plan = *startDTO.Plan
+			} else {
+				plan = startDTO.LoadPlan
+			}
+		}
+	}
+
+	// Fallback to experiment configuration parameters if load plan details were not supplied in request
+	if strings.TrimSpace(plan.TargetURL) == "" {
+		plan.TargetURL = exp.TargetURL
+	}
+	if strings.TrimSpace(plan.Method) == "" {
+		plan.Method = "GET"
+	}
+	if plan.InitialRate == 0 {
+		plan.InitialRate = exp.Config.InitialRate
+	}
+	if plan.StepRate == 0 {
+		plan.StepRate = exp.Config.StepRate
+	}
+	if plan.MaxRate == 0 {
+		plan.MaxRate = exp.Config.MaxRate
+	}
+	if plan.StepDurationSeconds == 0 {
+		plan.StepDurationSeconds = exp.Config.StepDurationSeconds
+	}
+
+	if err := plan.Validate(); err != nil {
+		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid load plan: %v", err))
+		return
+	}
+
+	if err := h.service.StartExperiment(r.Context(), id, plan); err != nil {
+		if strings.Contains(err.Error(), "was not found") {
+			h.writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "already running") || strings.Contains(err.Error(), "not in StateCreated") {
+			h.writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		h.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, StatusResponse{Status: string(experiment.StateRunning)})
+}
+
+// StopExperiment handles POST /api/experiments/{id}/stop
+func (h *Handler) StopExperiment(w http.ResponseWriter, r *http.Request) {
+	if h.service == nil {
+		h.writeError(w, http.StatusInternalServerError, "experiment service is not configured")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		h.writeError(w, http.StatusBadRequest, "experiment id is required")
+		return
+	}
+
+	reason := "manual stop via API"
+	if r.Body != nil && r.ContentLength != 0 {
+		var dto StopExperimentDTO
+		if err := json.NewDecoder(r.Body).Decode(&dto); err == nil && strings.TrimSpace(dto.Reason) != "" {
+			reason = strings.TrimSpace(dto.Reason)
+		}
+	}
+
+	if err := h.service.StopExperiment(r.Context(), id, reason); err != nil {
+		if strings.Contains(err.Error(), "not actively running") {
+			h.writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "not found") {
+			h.writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		h.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, StatusResponse{Status: string(experiment.StateStopping)})
+}
+
+// GetExperiment handles GET /api/experiments/{id}
+func (h *Handler) GetExperiment(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		h.writeError(w, http.StatusBadRequest, "experiment id is required")
+		return
+	}
+
+	var exp *experiment.Experiment
+	var err error
+	if h.repo != nil {
+		exp, err = h.repo.GetByID(r.Context(), id)
+	} else if h.service != nil {
+		exp, err = h.service.GetStatus(r.Context(), id)
+	} else {
+		h.writeError(w, http.StatusInternalServerError, "no experiment repository or service configured")
+		return
+	}
+
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to retrieve experiment: %v", err))
+		return
+	}
+	if exp == nil {
+		h.writeError(w, http.StatusNotFound, fmt.Sprintf("experiment %s was not found", id))
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, exp)
+}
+
+// ListExperiments handles GET /api/experiments
+func (h *Handler) ListExperiments(w http.ResponseWriter, r *http.Request) {
+	if h.repo == nil {
+		h.writeError(w, http.StatusInternalServerError, "experiment repository is not configured")
+		return
+	}
+
+	experiments, err := h.repo.List(r.Context())
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list experiments: %v", err))
+		return
+	}
+	if experiments == nil {
+		experiments = make([]experiment.Experiment, 0)
+	}
+
+	h.writeJSON(w, http.StatusOK, experiments)
+}
+
+// GetExperimentStatus handles GET /api/experiments/{id}/status
+func (h *Handler) GetExperimentStatus(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		h.writeError(w, http.StatusBadRequest, "experiment id is required")
+		return
+	}
+
+	// Verify experiment existence first
+	var exp *experiment.Experiment
+	var err error
+	if h.repo != nil {
+		exp, err = h.repo.GetByID(r.Context(), id)
+	} else if h.service != nil {
+		exp, err = h.service.GetStatus(r.Context(), id)
+	}
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to verify experiment: %v", err))
+		return
+	}
+	if exp == nil {
+		h.writeError(w, http.StatusNotFound, fmt.Sprintf("experiment %s was not found", id))
+		return
+	}
+
+	// 1. Try real-time SnapshotProvider if available
+	if h.snapshotProvider != nil {
+		snapshot, snapErr := h.snapshotProvider.GetLatestSnapshot(r.Context(), id)
+		if snapErr == nil && snapshot != nil {
+			h.writeJSON(w, http.StatusOK, snapshot)
+			return
+		}
+	}
+
+	// 2. Fall back to latest persisted observation in repository
+	if h.repo != nil {
+		observations, obsErr := h.repo.GetObservations(r.Context(), id)
+		if obsErr == nil && len(observations) > 0 {
+			latest := observations[len(observations)-1]
+			snapshot := watcher.MetricSnapshot{
+				ExperimentID:      id,
+				TargetService:     exp.TargetService,
+				Timestamp:         latest.Timestamp,
+				RequestRate:       latest.LoadRate,
+				P95LatencyMs:      latest.P95LatencyMs,
+				ErrorRate:         latest.ErrorRate,
+				Availability:      latest.Availability,
+				CPUUtilization:    latest.CPUUtilization,
+				MemoryUtilization: latest.MemoryUtilization,
+			}
+			h.writeJSON(w, http.StatusOK, snapshot)
+			return
+		}
+	}
+
+	// 3. If experiment has no telemetry recorded yet, return a baseline snapshot
+	h.writeJSON(w, http.StatusOK, watcher.MetricSnapshot{
+		ExperimentID:  id,
+		TargetService: exp.TargetService,
+		Timestamp:     exp.CreatedAt,
+	})
+}
+
+// GetDependencies handles GET /api/dependencies
+func (h *Handler) GetDependencies(w http.ResponseWriter, r *http.Request) {
+	if h.graphAnalyzer == nil {
+		h.writeError(w, http.StatusInternalServerError, "graph analyzer is not configured")
+		return
+	}
+
+	lookback := int64(3600)
+	if q := r.URL.Query().Get("lookback"); q != "" {
+		if parsed, err := strconv.ParseInt(q, 10, 64); err == nil && parsed > 0 {
+			lookback = parsed
+		}
+	} else if q := r.URL.Query().Get("lookback_seconds"); q != "" {
+		if parsed, err := strconv.ParseInt(q, 10, 64); err == nil && parsed > 0 {
+			lookback = parsed
+		}
+	}
+
+	depGraph, err := h.graphAnalyzer.BuildGraph(r.Context(), lookback)
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to build dependency graph: %v", err))
+		return
+	}
+
+	scores := h.graphAnalyzer.ScoreCriticality(depGraph)
+	if scores == nil {
+		scores = make([]graph.ServiceScore, 0)
+	}
+
+	h.writeJSON(w, http.StatusOK, DependenciesResponse{
+		Graph:  depGraph,
+		Scores: scores,
+	})
+}
+
+// GetExperimentReport handles GET /api/experiments/{id}/report
+func (h *Handler) GetExperimentReport(w http.ResponseWriter, r *http.Request) {
+	if h.repo == nil {
+		h.writeError(w, http.StatusInternalServerError, "experiment repository is not configured")
+		return
+	}
+
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		h.writeError(w, http.StatusBadRequest, "experiment id is required")
+		return
+	}
+
+	// Verify experiment exists first
+	exp, err := h.repo.GetByID(r.Context(), id)
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to retrieve experiment: %v", err))
+		return
+	}
+	if exp == nil {
+		h.writeError(w, http.StatusNotFound, fmt.Sprintf("experiment %s was not found", id))
+		return
+	}
+
+	report, err := h.repo.GetReport(r.Context(), id)
+	if err != nil {
+		h.writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to retrieve report: %v", err))
+		return
+	}
+	if report == nil {
+		h.writeError(w, http.StatusNotFound, fmt.Sprintf("report for experiment %s was not found", id))
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, report)
+}
+
+// GetHealth handles GET /api/health
+func (h *Handler) GetHealth(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]any{
+		"status":     "UP",
+		"jaeger":     "CONNECTED",
+		"prometheus": "CONNECTED",
+	}
+
+	if h.checker != nil {
+		healthStatus, err := h.checker.CheckHealth(r.Context())
+		if err != nil {
+			resp["status"] = "DOWN"
+			resp["errors"] = err.Error()
+		}
+		for k, v := range healthStatus {
+			resp[k] = v
+		}
+		if resp["status"] == "DOWN" {
+			h.writeJSON(w, http.StatusServiceUnavailable, resp)
+			return
+		}
+	}
+
+	h.writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) writeJSON(w http.ResponseWriter, status int, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		// Log write error if needed
+		_ = err
+	}
+}
+
+func (h *Handler) writeError(w http.ResponseWriter, status int, message string) {
+	h.writeJSON(w, status, ErrorResponse{Error: message})
+}
