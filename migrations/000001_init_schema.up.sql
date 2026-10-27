@@ -44,25 +44,7 @@ CREATE TABLE IF NOT EXISTS service_scores (
     calculated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- ============================================================================
--- TODO (User Practice): Task 1 - Define the `observations` table
--- ----------------------------------------------------------------------------
--- Objective:
---   Persist granular time-series observations sampled during experiment execution.
---
--- Specifications from docs/LLD.md:
---   - Table name: observations
---   - id: SERIAL PRIMARY KEY
---   - experiment_id: VARCHAR(64) NOT NULL REFERENCES experiments(id) ON DELETE CASCADE
---   - timestamp: TIMESTAMP WITH TIME ZONE NOT NULL
---   - load_rate: INT NOT NULL
---   - p95_latency: DOUBLE PRECISION NOT NULL
---   - error_rate: DOUBLE PRECISION NOT NULL
---   - availability: DOUBLE PRECISION NOT NULL
---   - cpu_utilization: DOUBLE PRECISION NOT NULL
---   - memory_utilization: DOUBLE PRECISION NOT NULL
--- ============================================================================
--- >>> YOUR CODE FOR TASK 1 STARTS HERE <<<
+
 CREATE TABLE IF NOT EXISTS observations (
     id SERIAL PRIMARY KEY,
     experiment_id VARCHAR(64) NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
@@ -75,24 +57,6 @@ CREATE TABLE IF NOT EXISTS observations (
     memory_utilization DOUBLE PRECISION NOT NULL
 );
 
--- >>> YOUR CODE FOR TASK 1 ENDS HERE <<<
-
-
--- ============================================================================
--- TODO (User Practice): Task 2 - Define the `safety_events` table
--- ----------------------------------------------------------------------------
--- Objective:
---   Store safety intervention / SLA breach audit events triggered during tests.
---
--- Specifications from docs/LLD.md:
---   - Table name: safety_events
---   - id: SERIAL PRIMARY KEY
---   - experiment_id: VARCHAR(64) NOT NULL REFERENCES experiments(id) ON DELETE CASCADE
---   - event_type: VARCHAR(64) NOT NULL
---   - reason: TEXT NOT NULL
---   - timestamp: TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
--- ============================================================================
--- >>> YOUR CODE FOR TASK 2 STARTS HERE <<<
 CREATE TABLE IF NOT EXISTS safety_events(
     id SERIAL PRIMARY KEY,
     experiment_id VARCHAR(64) NOT NULL REFERENCES experiments(id) ON DELETE CASCADE,
@@ -100,8 +64,6 @@ CREATE TABLE IF NOT EXISTS safety_events(
     reason TEXT NOT NULL,
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
-
--- >>> YOUR CODE FOR TASK 2 ENDS HERE <<<
 
 
 CREATE TABLE IF NOT EXISTS reports (
