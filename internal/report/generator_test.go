@@ -184,6 +184,9 @@ func TestNewGeneratorWithTemplate(t *testing.T) {
 		if err == nil {
 			t.Error("expected error for malformed template syntax, got nil")
 		}
+		if !errors.Is(err, report.ErrInvalidTemplate) {
+			t.Errorf("expected error to wrap ErrInvalidTemplate, got: %v", err)
+		}
 	})
 }
 
@@ -553,6 +556,9 @@ func TestGenerator_RenderHTML(t *testing.T) {
 		}
 		if !strings.Contains(html, "LOW RISK") {
 			t.Errorf("expected LOW RISK badge for score 0.25")
+		}
+		if !strings.Contains(html, "Not detected") {
+			t.Errorf("expected 'Not detected' for degradation knee when rate is 0")
 		}
 	})
 }

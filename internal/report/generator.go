@@ -84,7 +84,7 @@ func NewGeneratorWithTemplate(customHTML string) (*Generator, error) {
 	}
 	tmpl, err := template.New("report").Funcs(templateFuncs()).Parse(customHTML)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidTemplate, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalidTemplate, err)
 	}
 	return &Generator{tmpl: tmpl}, nil
 }
@@ -494,7 +494,7 @@ func renderDegradationCurveSVG(report *capacity.ExperimentReport) template.HTML 
 	}
 
 	var buf bytes.Buffer
-	buf.WriteString(fmt.Sprintf(`<svg viewBox="0 0 %.0f %.0f" width="100%%" height="auto" xmlns="http://www.w3.org/2000/svg" style="max-height: 360px;">`+"\n", svgW, svgH))
+	fmt.Fprintf(&buf, "<svg viewBox=\"0 0 %.0f %.0f\" width=\"100%%\" height=\"auto\" xmlns=\"http://www.w3.org/2000/svg\" style=\"max-height: 360px;\">\n", svgW, svgH)
 
 	// Defs: Gradients and shadows
 	buf.WriteString(`  <defs>
@@ -505,7 +505,7 @@ func renderDegradationCurveSVG(report *capacity.ExperimentReport) template.HTML 
   </defs>` + "\n")
 
 	// Background
-	buf.WriteString(fmt.Sprintf(`  <rect width="%.0f" height="%.0f" fill="#ffffff" rx="10"/>`+"\n", svgW, svgH))
+	fmt.Fprintf(&buf, "  <rect width=\"%.0f\" height=\"%.0f\" fill=\"#ffffff\" rx=\"10\"/>\n", svgW, svgH)
 
 	// Y-axis horizontal grid lines (4 levels)
 	gridLevels := 4
@@ -513,24 +513,24 @@ func renderDegradationCurveSVG(report *capacity.ExperimentReport) template.HTML 
 		ratio := float64(i) / float64(gridLevels)
 		yVal := padT + plotH - (ratio * plotH)
 		latVal := ratio * yMax
-		buf.WriteString(fmt.Sprintf(`  <line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#e2e8f0" stroke-width="1" stroke-dasharray="3,3"/>`+"\n", padL, yVal, padL+plotW, yVal))
-		buf.WriteString(fmt.Sprintf(`  <text x="%.1f" y="%.1f" text-anchor="end" fill="#64748b" font-size="11" font-family="system-ui, sans-serif">%.0fms</text>`+"\n", padL-10, yVal+4, latVal))
+		fmt.Fprintf(&buf, "  <line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#e2e8f0\" stroke-width=\"1\" stroke-dasharray=\"3,3\"/>\n", padL, yVal, padL+plotW, yVal)
+		fmt.Fprintf(&buf, "  <text x=\"%.1f\" y=\"%.1f\" text-anchor=\"end\" fill=\"#64748b\" font-size=\"11\" font-family=\"system-ui, sans-serif\">%.0fms</text>\n", padL-10, yVal+4, latVal)
 	}
 
 	// X-axis baseline and tick labels
-	buf.WriteString(fmt.Sprintf(`  <line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#cbd5e1" stroke-width="1.5"/>`+"\n", padL, padT+plotH, padL+plotW, padT+plotH))
+	fmt.Fprintf(&buf, "  <line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#cbd5e1\" stroke-width=\"1.5\"/>\n", padL, padT+plotH, padL+plotW, padT+plotH)
 	xTicks := 5
 	for i := 0; i <= xTicks; i++ {
 		ratio := float64(i) / float64(xTicks)
 		rateVal := int(math.Round(ratio * float64(maxRate)))
 		xVal := padL + ratio*plotW
-		buf.WriteString(fmt.Sprintf(`  <line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#cbd5e1" stroke-width="1"/>`+"\n", xVal, padT+plotH, xVal, padT+plotH+4))
-		buf.WriteString(fmt.Sprintf(`  <text x="%.1f" y="%.1f" text-anchor="middle" fill="#64748b" font-size="11" font-family="system-ui, sans-serif">%d RPS</text>`+"\n", xVal, padT+plotH+18, rateVal))
+		fmt.Fprintf(&buf, "  <line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#cbd5e1\" stroke-width=\"1\"/>\n", xVal, padT+plotH, xVal, padT+plotH+4)
+		fmt.Fprintf(&buf, "  <text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" fill=\"#64748b\" font-size=\"11\" font-family=\"system-ui, sans-serif\">%d RPS</text>\n", xVal, padT+plotH+18, rateVal)
 	}
 
 	// Axis Titles
-	buf.WriteString(fmt.Sprintf(`  <text x="%.1f" y="%.1f" text-anchor="middle" fill="#475569" font-size="12" font-weight="600" font-family="system-ui, sans-serif">Offered Load Rate (Requests / Sec)</text>`+"\n", padL+plotW/2, svgH-10))
-	buf.WriteString(fmt.Sprintf(`  <text transform="rotate(-90)" x="%.1f" y="%.1f" text-anchor="middle" fill="#475569" font-size="12" font-weight="600" font-family="system-ui, sans-serif">P95 Latency (ms)</text>`+"\n", -(padT + plotH/2), 20.0))
+	fmt.Fprintf(&buf, "  <text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" fill=\"#475569\" font-size=\"12\" font-weight=\"600\" font-family=\"system-ui, sans-serif\">Offered Load Rate (Requests / Sec)</text>\n", padL+plotW/2, svgH-10)
+	fmt.Fprintf(&buf, "  <text transform=\"rotate(-90)\" x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" fill=\"#475569\" font-size=\"12\" font-weight=\"600\" font-family=\"system-ui, sans-serif\">P95 Latency (ms)</text>\n", -(padT + plotH/2), 20.0)
 
 	// Shaded area under the curve
 	var areaPoints []string
@@ -542,38 +542,38 @@ func renderDegradationCurveSVG(report *capacity.ExperimentReport) template.HTML 
 	}
 	lastX := mapX(points[len(points)-1].loadRate)
 	areaPoints = append(areaPoints, fmt.Sprintf("%.1f,%.1f", lastX, baseY))
-	buf.WriteString(fmt.Sprintf(`  <polygon points="%s" fill="url(#curveGradient)"/>`+"\n", strings.Join(areaPoints, " ")))
+	fmt.Fprintf(&buf, "  <polygon points=\"%s\" fill=\"url(#curveGradient)\"/>\n", strings.Join(areaPoints, " "))
 
 	// Degradation curve polyline
 	var linePoints []string
 	for _, pt := range points {
 		linePoints = append(linePoints, fmt.Sprintf("%.1f,%.1f", mapX(pt.loadRate), mapY(pt.avgP95Ms)))
 	}
-	buf.WriteString(fmt.Sprintf(`  <polyline points="%s" fill="none" stroke="#4f46e5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>`+"\n", strings.Join(linePoints, " ")))
+	fmt.Fprintf(&buf, "  <polyline points=\"%s\" fill=\"none\" stroke=\"#4f46e5\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n", strings.Join(linePoints, " "))
 
 	// Threshold vertical markers
 	// 1. Sustainable Rate
 	if report.MaximumSustainableRate > 0 && report.MaximumSustainableRate <= maxRate {
 		sx := mapX(report.MaximumSustainableRate)
-		buf.WriteString(fmt.Sprintf(`  <line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#10b981" stroke-width="2" stroke-dasharray="4,3"/>`+"\n", sx, padT, sx, baseY))
-		buf.WriteString(fmt.Sprintf(`  <rect x="%.1f" y="%.1f" width="94" height="20" rx="4" fill="#10b981"/>`+"\n", sx-47, padT-22))
-		buf.WriteString(fmt.Sprintf(`  <text x="%.1f" y="%.1f" text-anchor="middle" fill="#ffffff" font-size="10" font-weight="700" font-family="system-ui, sans-serif">Sustainable: %d</text>`+"\n", sx, padT-8, report.MaximumSustainableRate))
+		fmt.Fprintf(&buf, "  <line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#10b981\" stroke-width=\"2\" stroke-dasharray=\"4,3\"/>\n", sx, padT, sx, baseY)
+		fmt.Fprintf(&buf, "  <rect x=\"%.1f\" y=\"%.1f\" width=\"94\" height=\"20\" rx=\"4\" fill=\"#10b981\"/>\n", sx-47, padT-22)
+		fmt.Fprintf(&buf, "  <text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" fill=\"#ffffff\" font-size=\"10\" font-weight=\"700\" font-family=\"system-ui, sans-serif\">Sustainable: %d</text>\n", sx, padT-8, report.MaximumSustainableRate)
 	}
 
 	// 2. Degradation Knee Rate
 	if report.DegradationRate > 0 && report.DegradationRate <= maxRate {
 		kx := mapX(report.DegradationRate)
-		buf.WriteString(fmt.Sprintf(`  <line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#f59e0b" stroke-width="2" stroke-dasharray="4,3"/>`+"\n", kx, padT, kx, baseY))
-		buf.WriteString(fmt.Sprintf(`  <rect x="%.1f" y="%.1f" width="80" height="20" rx="4" fill="#f59e0b"/>`+"\n", kx-40, padT-22))
-		buf.WriteString(fmt.Sprintf(`  <text x="%.1f" y="%.1f" text-anchor="middle" fill="#ffffff" font-size="10" font-weight="700" font-family="system-ui, sans-serif">Knee: %d RPS</text>`+"\n", kx, padT-8, report.DegradationRate))
+		fmt.Fprintf(&buf, "  <line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#f59e0b\" stroke-width=\"2\" stroke-dasharray=\"4,3\"/>\n", kx, padT, kx, baseY)
+		fmt.Fprintf(&buf, "  <rect x=\"%.1f\" y=\"%.1f\" width=\"80\" height=\"20\" rx=\"4\" fill=\"#f59e0b\"/>\n", kx-40, padT-22)
+		fmt.Fprintf(&buf, "  <text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" fill=\"#ffffff\" font-size=\"10\" font-weight=\"700\" font-family=\"system-ui, sans-serif\">Knee: %d RPS</text>\n", kx, padT-8, report.DegradationRate)
 	}
 
 	// 3. Safety Boundary Rate (render if distinct from sustainable rate)
 	if report.SafetyBoundaryRate > 0 && report.SafetyBoundaryRate <= maxRate && report.SafetyBoundaryRate != report.MaximumSustainableRate {
 		bx := mapX(report.SafetyBoundaryRate)
-		buf.WriteString(fmt.Sprintf(`  <line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#ef4444" stroke-width="2" stroke-dasharray="4,3"/>`+"\n", bx, padT, bx, baseY))
-		buf.WriteString(fmt.Sprintf(`  <rect x="%.1f" y="%.1f" width="86" height="20" rx="4" fill="#ef4444"/>`+"\n", bx-43, padT-22))
-		buf.WriteString(fmt.Sprintf(`  <text x="%.1f" y="%.1f" text-anchor="middle" fill="#ffffff" font-size="10" font-weight="700" font-family="system-ui, sans-serif">Breach: %d RPS</text>`+"\n", bx, padT-8, report.SafetyBoundaryRate))
+		fmt.Fprintf(&buf, "  <line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#ef4444\" stroke-width=\"2\" stroke-dasharray=\"4,3\"/>\n", bx, padT, bx, baseY)
+		fmt.Fprintf(&buf, "  <rect x=\"%.1f\" y=\"%.1f\" width=\"86\" height=\"20\" rx=\"4\" fill=\"#ef4444\"/>\n", bx-43, padT-22)
+		fmt.Fprintf(&buf, "  <text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" fill=\"#ffffff\" font-size=\"10\" font-weight=\"700\" font-family=\"system-ui, sans-serif\">Breach: %d RPS</text>\n", bx, padT-8, report.SafetyBoundaryRate)
 	}
 
 	// Data Point Circles
@@ -581,7 +581,7 @@ func renderDegradationCurveSVG(report *capacity.ExperimentReport) template.HTML 
 		cx := mapX(pt.loadRate)
 		cy := mapY(pt.avgP95Ms)
 		tooltip := fmt.Sprintf("Load: %d RPS | P95: %.1fms | Error: %.2f%%", pt.loadRate, pt.avgP95Ms, pt.avgError*100)
-		buf.WriteString(fmt.Sprintf(`  <circle cx="%.1f" cy="%.1f" r="5" fill="#4f46e5" stroke="#ffffff" stroke-width="2"><title>%s</title></circle>`+"\n", cx, cy, template.HTMLEscapeString(tooltip)))
+		fmt.Fprintf(&buf, "  <circle cx=\"%.1f\" cy=\"%.1f\" r=\"5\" fill=\"#4f46e5\" stroke=\"#ffffff\" stroke-width=\"2\"><title>%s</title></circle>\n", cx, cy, template.HTMLEscapeString(tooltip))
 	}
 
 	buf.WriteString("</svg>")
@@ -935,8 +935,13 @@ const defaultHTMLTemplate = `<!DOCTYPE html>
       </div>
       <div class="kpi-card">
         <div class="kpi-label">Degradation Knee</div>
+        {{if gt .DegradationRate 0}}
         <div class="kpi-value val-degradation">{{.DegradationRate}} <span style="font-size: 16px; font-weight: 600;">RPS</span></div>
         <div class="kpi-desc">Latency slope surge &gt;50%</div>
+        {{else}}
+        <div class="kpi-value" style="color: var(--slate-500); font-size: 20px;">Not detected</div>
+        <div class="kpi-desc">No knee transition observed</div>
+        {{end}}
       </div>
       <div class="kpi-card">
         <div class="kpi-label">Safety Breach Rate</div>

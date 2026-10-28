@@ -432,14 +432,24 @@ func TestManager_Pipeline_WithReportGenerator(t *testing.T) {
 
 	// Unblock stress engine so it completes the experiment pipeline
 	stressEng.Unblock()
-	time.Sleep(100 * time.Millisecond)
 
-	status, err := mgr.GetStatus(context.Background(), exp.ID)
-	if err != nil {
-		t.Fatalf("failed to get status: %v", err)
+	// Bounded poll until experiment reaches StateCompleted or deadline expires
+	var lastStatus *experiment.Experiment
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		status, err := mgr.GetStatus(context.Background(), exp.ID)
+		if err != nil {
+			t.Fatalf("failed to get status during polling: %v", err)
+		}
+		lastStatus = status
+		if status.State == experiment.StateCompleted {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if status.State != experiment.StateCompleted {
-		t.Errorf("expected completed state, got: %s", status.State)
+
+	if lastStatus == nil || lastStatus.State != experiment.StateCompleted {
+		t.Fatalf("expected state %s within deadline, got: %v", experiment.StateCompleted, lastStatus)
 	}
 
 	rep, err := repo.GetReport(context.Background(), exp.ID)

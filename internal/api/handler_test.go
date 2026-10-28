@@ -697,6 +697,9 @@ func TestHandler_GetExperimentReport(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
+	if vary := rec.Header().Get("Vary"); vary != "Accept" {
+		t.Errorf("expected Vary: Accept header on JSON response, got %q", vary)
+	}
 
 	// HTML format request via query parameter
 	reqHTML := httptest.NewRequest(http.MethodGet, "/api/experiments/exp-123/report?format=html", nil)
@@ -707,11 +710,42 @@ func TestHandler_GetExperimentReport(t *testing.T) {
 	if recHTML.Code != http.StatusOK {
 		t.Fatalf("expected 200 for HTML report, got %d", recHTML.Code)
 	}
+	if vary := recHTML.Header().Get("Vary"); vary != "Accept" {
+		t.Errorf("expected Vary: Accept header on HTML response, got %q", vary)
+	}
 	if ct := recHTML.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
 		t.Errorf("expected Content-Type text/html, got %q", ct)
 	}
 	if !strings.Contains(recHTML.Body.String(), "<!DOCTYPE html>") {
 		t.Errorf("expected HTML content in response body, got: %s", recHTML.Body.String())
+	}
+
+	// Accept negotiation: text/html with q=0 should NOT select HTML (should return JSON)
+	reqQ0 := httptest.NewRequest(http.MethodGet, "/api/experiments/exp-123/report", nil)
+	reqQ0.Header.Set("Accept", "text/html;q=0, application/json")
+	reqQ0.SetPathValue("id", "exp-123")
+	recQ0 := httptest.NewRecorder()
+	h.GetExperimentReport(recQ0, reqQ0)
+
+	if recQ0.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", recQ0.Code)
+	}
+	if ct := recQ0.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Errorf("expected application/json for text/html;q=0, got %q", ct)
+	}
+
+	// Accept negotiation: text/html with higher quality than application/json selects HTML
+	reqQHigh := httptest.NewRequest(http.MethodGet, "/api/experiments/exp-123/report", nil)
+	reqQHigh.Header.Set("Accept", "text/html;q=0.9, application/json;q=0.8")
+	reqQHigh.SetPathValue("id", "exp-123")
+	recQHigh := httptest.NewRecorder()
+	h.GetExperimentReport(recQHigh, reqQHigh)
+
+	if recQHigh.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", recQHigh.Code)
+	}
+	if ct := recQHigh.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Errorf("expected text/html when qHTML > qJSON, got %q", ct)
 	}
 
 	// Missing report
