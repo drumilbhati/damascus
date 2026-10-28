@@ -698,6 +698,22 @@ func TestHandler_GetExperimentReport(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 
+	// HTML format request via query parameter
+	reqHTML := httptest.NewRequest(http.MethodGet, "/api/experiments/exp-123/report?format=html", nil)
+	reqHTML.SetPathValue("id", "exp-123")
+	recHTML := httptest.NewRecorder()
+	h.GetExperimentReport(recHTML, reqHTML)
+
+	if recHTML.Code != http.StatusOK {
+		t.Fatalf("expected 200 for HTML report, got %d", recHTML.Code)
+	}
+	if ct := recHTML.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Errorf("expected Content-Type text/html, got %q", ct)
+	}
+	if !strings.Contains(recHTML.Body.String(), "<!DOCTYPE html>") {
+		t.Errorf("expected HTML content in response body, got: %s", recHTML.Body.String())
+	}
+
 	// Missing report
 	req = httptest.NewRequest(http.MethodGet, "/api/experiments/exp-404/report", nil)
 	req.SetPathValue("id", "exp-404")

@@ -430,7 +430,7 @@ The `BaselineCalculator` in `internal/capacity/metrics.go` calculates Recovery T
 
 ```go
 
-// ReportEngine builds structured JSON and rendered HTML reports
+// ReportEngine builds structured JSON and rendered standalone HTML reports
 type ReportEngine interface {
 	Generate(
 		exp experiment.Experiment,
@@ -438,7 +438,17 @@ type ReportEngine interface {
 		scores []graph.ServiceScore,
 		observations []capacity.Observation,
 	) (*capacity.ExperimentReport, error)
+	RenderJSON(report *capacity.ExperimentReport) ([]byte, error)
+	RenderHTML(report *capacity.ExperimentReport) ([]byte, error)
 }
+```
+
+The implementation `Generator` in `internal/report/generator.go` produces multi-format deliverables:
+- **`Generate`**: Synthesizes experiment configuration, capacity thresholds, graph criticality scores, and time-series telemetry observations into the unified `capacity.ExperimentReport` domain model. It automatically compiles actionable engineering recommendations covering SPOF risks, throughput deficits, knee degradation alerts, safety boundary violations, and host resource bottlenecks.
+- **`RenderJSON` / `RenderJSONString`**: Produces formatted, indented JSON representations of the capacity report suitable for database persistence, API transmission, and CI/CD automation pipelines.
+- **`RenderHTML` / `RenderHTMLString`**: Generates standalone, self-contained HTML5 reports utilizing Go `html/template` with embedded CSS styling and zero external CDN or JavaScript dependencies. Renders executive summary KPI cards, microservice criticality breakdown with risk badges, interactive inline SVG degradation curves (P95 latency vs load rate with sustainable ceiling, knee transition, and safety breach markers), automated engineering recommendations, and granular observation telemetry tables.
+
+```go
 
 // ExperimentRepository persists lifecycle states, observations, and reports
 type ExperimentRepository interface {

@@ -14,6 +14,7 @@ import (
 	"damascus/internal/capacity"
 	"damascus/internal/experiment"
 	"damascus/internal/graph"
+	reportpkg "damascus/internal/report"
 	"damascus/internal/storage"
 	"damascus/internal/stress"
 	"damascus/internal/watcher"
@@ -112,11 +113,19 @@ type Handler struct {
 	graphAnalyzer    GraphAnalyzer
 	snapshotProvider SnapshotProvider
 	checker          ObservabilityChecker
+	reportEngine     reportpkg.ReportEngine
 	logger           *slog.Logger
 }
 
 // HandlerOption configures dependencies for Handler.
 type HandlerOption func(*Handler)
+
+// WithReportEngine injects a ReportEngine for multi-format report exports.
+func WithReportEngine(re reportpkg.ReportEngine) HandlerOption {
+	return func(h *Handler) {
+		h.reportEngine = re
+	}
+}
 
 // WithSnapshotProvider injects a SnapshotProvider.
 func WithSnapshotProvider(sp SnapshotProvider) HandlerOption {
@@ -579,6 +588,24 @@ func (h *Handler) GetExperimentReport(w http.ResponseWriter, r *http.Request) {
 	}
 	if report == nil {
 		h.writeError(w, http.StatusNotFound, fmt.Sprintf("report for experiment %s was not found", id))
+		return
+	}
+
+	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+	accept := strings.ToLower(r.Header.Get("Accept"))
+	if format == "html" || (format == "" && strings.Contains(accept, "text/html") && !strings.Contains(accept, "application/json")) {
+		engine := h.reportEngine
+		if engine == nil {
+			engine = reportpkg.NewGenerator()
+		}
+		htmlBytes, err := engine.RenderHTML(report)
+		if err != nil {
+			h.handleServiceError(w, err, "render_html_report")
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(htmlBytes)
 		return
 	}
 
