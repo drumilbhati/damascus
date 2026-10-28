@@ -1,8 +1,28 @@
 @import "tailwindcss";
 
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #21262d;
+  --border-default: #30363d;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #6e7681;
+  --accent-orange: #f0883e;
+  --accent-green: #3fb950;
+  --accent-red: #f85149;
+  --accent-blue: #58a6ff;
+  --accent-purple: #bc8cff;
+}
+
 @layer base {
   body {
     margin: 0;
     min-height: 100vh;
+    background-color: #0d1117;
+    color: #e6edf3;
+  }
+  html.dark {
+    color-scheme: dark;
   }
 }

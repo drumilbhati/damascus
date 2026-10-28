@@ -1,32 +1,39 @@
-# React + TypeScript + Vite
+# Damascus Web UI
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Professional dark-themed observability and chaos control dashboard inspired by Apache SkyWalking.
 
-Currently, two official plugins are available:
+## 🚀 Running with Docker
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+### Build the Docker Image:
+```bash
+docker build -t damascus-ui ./web
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+### Run the Container:
+```bash
+docker run -d --name damascus-ui \
+  -p 3000:80 \
+  -e BACKEND_URL=http://host.docker.internal:8080/api/ \
+  damascus-ui
+```
+
+### Or using Docker Compose:
+```bash
+docker compose -f docker-compose.web.yaml up -d
+```
+
+The UI will be accessible at [http://localhost:3000](http://localhost:3000).
+
+## 🛠️ Local Development
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Build production static bundle:
+```bash
+npm run build
+```
+

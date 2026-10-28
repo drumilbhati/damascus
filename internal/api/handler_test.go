@@ -801,3 +801,43 @@ func TestHandler_GetHealth(t *testing.T) {
 		}
 	})
 }
+
+func TestHandler_GetServices(t *testing.T) {
+	t.Run("success returns discovered service list", func(t *testing.T) {
+		g := graph.NewDependencyGraph()
+		g.AddNode("cart-service", nil)
+		g.AddNode("order-service", nil)
+		analyzer := &mockGraphAnalyzer{
+			buildGraphFn: func(ctx context.Context, lookback int64) (*graph.DependencyGraph, error) {
+				return g, nil
+			},
+		}
+
+		h := NewHandler(nil, nil, analyzer)
+		req := httptest.NewRequest(http.MethodGet, "/api/services", nil)
+		rec := httptest.NewRecorder()
+		h.GetServices(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+		var resp ServicesResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if len(resp.Services) != 2 {
+			t.Fatalf("expected 2 services, got %d: %v", len(resp.Services), resp.Services)
+		}
+	})
+
+	t.Run("nil analyzer returns internal error", func(t *testing.T) {
+		h := NewHandler(nil, nil, nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/services", nil)
+		rec := httptest.NewRecorder()
+		h.GetServices(rec, req)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500, got %d", rec.Code)
+		}
+	})
+}

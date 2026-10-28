@@ -15,44 +15,61 @@ export const ReportsPage: React.FC = () => {
   const { data: report, isLoading, error } = useExperimentReport(selectedExpId);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      {/* Compact header */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+        <h1 className="text-base font-semibold" style={{ color: '#e6edf3' }}>
           Capacity Analysis Reports
         </h1>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          Deterministic evaluations of sustainable throughput limits, degradation knees, and recovery speeds.
+        <p className="text-xs" style={{ color: '#8b949e' }}>
+          Deterministic evaluations of sustainable throughput limits, degradation knees, and recovery speeds
         </p>
       </div>
 
       {completedExperiments.length === 0 ? (
-        <div className="flex h-64 flex-col items-center justify-center space-y-3 rounded-2xl border border-slate-200 bg-white p-6 text-center text-slate-500 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
-          <FileSpreadsheet className="h-10 w-10 stroke-1 text-slate-400" />
-          <p className="font-medium">No completed experiments available yet</p>
-          <p className="text-xs">
-            Run an experiment to completion to generate a full capacity and recovery report.
-          </p>
+        <div
+          className="flex h-64 flex-col items-center justify-center gap-3 rounded text-center"
+          style={{ border: '1px solid #30363d', backgroundColor: '#161b22' }}
+        >
+          <FileSpreadsheet className="h-8 w-8" style={{ color: '#30363d' }} />
+          <div>
+            <p className="text-xs font-semibold" style={{ color: '#8b949e' }}>No completed experiments available yet</p>
+            <p className="mt-1 text-[11px]" style={{ color: '#6e7681' }}>
+              Run an experiment to completion to generate a capacity and recovery report.
+            </p>
+          </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
-          {/* Select Experiment List */}
-          <div className="space-y-3 lg:col-span-1">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-              Completed Runs
-            </h2>
-            <div className="space-y-2">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-4">
+          {/* Experiment selector list */}
+          <div className="lg:col-span-1">
+            <div className="mb-2">
+              <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>
+                Completed Runs
+              </span>
+            </div>
+            <div className="space-y-1">
               {completedExperiments.map((exp) => (
                 <button
                   key={exp.id}
                   onClick={() => setSelectedExpId(exp.id)}
-                  className={`w-full text-left rounded-xl p-3 text-xs transition border ${
+                  className="w-full rounded px-3 py-2.5 text-left text-xs transition-colors"
+                  style={
                     selectedExpId === exp.id
-                      ? 'border-indigo-500 bg-indigo-50/70 text-indigo-900 dark:border-indigo-500 dark:bg-indigo-950/60 dark:text-indigo-200 shadow-sm'
-                      : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300'
-                  }`}
+                      ? {
+                          backgroundColor: 'rgba(240,136,62,0.08)',
+                          border: '1px solid rgba(240,136,62,0.4)',
+                          color: '#f0883e',
+                        }
+                      : {
+                          backgroundColor: '#161b22',
+                          border: '1px solid #30363d',
+                          color: '#8b949e',
+                        }
+                  }
                 >
-                  <div className="font-bold">{exp.target_service}</div>
-                  <div className="mt-1 font-mono text-[10px] text-slate-400 truncate">
+                  <div className="font-semibold">{exp.target_service}</div>
+                  <div className="mt-0.5 font-mono text-[10px] truncate" style={{ color: '#6e7681' }}>
                     {exp.id}
                   </div>
                 </button>
@@ -60,77 +77,83 @@ export const ReportsPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Report Content */}
-          <div className="space-y-6 lg:col-span-3">
+          {/* Report content */}
+          <div className="space-y-4 lg:col-span-3">
             {isLoading ? (
-              <div className="flex h-64 items-center justify-center text-sm text-slate-400">
+              <div className="flex h-64 items-center justify-center text-xs" style={{ color: '#6e7681' }}>
                 Loading capacity report...
               </div>
             ) : error || !report ? (
-              <div className="rounded-2xl border border-slate-200 bg-white p-8 text-center text-slate-500 dark:border-slate-800 dark:bg-slate-900">
+              <div
+                className="flex h-40 items-center justify-center rounded text-xs"
+                style={{ border: '1px solid #30363d', backgroundColor: '#161b22', color: '#6e7681' }}
+              >
                 Select an experiment to view its analysis metrics.
               </div>
             ) : (
-              <div className="space-y-6">
-                {/* Executive Summary Cards */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                    <span className="text-xs font-semibold text-slate-500">
+              <div className="space-y-4">
+                {/* Summary stat cards */}
+                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                  <div className="rounded p-4" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
+                    <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>
                       Sustainable Ceiling
-                    </span>
-                    <div className="mt-2 text-2xl font-black text-emerald-600 dark:text-emerald-400">
-                      {report.maximum_sustainable_rate} RPS
                     </div>
-                    <span className="text-[11px] text-slate-400">Zero SLA violations</span>
+                    <div className="mt-2 font-mono text-2xl font-bold" style={{ color: '#3fb950' }}>
+                      {report.maximum_sustainable_rate}
+                    </div>
+                    <div className="mt-0.5 font-mono text-[11px]" style={{ color: '#6e7681' }}>RPS · zero SLA violations</div>
                   </div>
 
-                  <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                    <span className="text-xs font-semibold text-slate-500">
+                  <div className="rounded p-4" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
+                    <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>
                       Knee Degradation
-                    </span>
-                    <div className="mt-2 text-2xl font-black text-amber-600 dark:text-amber-400">
-                      {report.degradation_rate} RPS
                     </div>
-                    <span className="text-[11px] text-slate-400">Latency slope &gt;50% increase</span>
+                    <div className="mt-2 font-mono text-2xl font-bold" style={{ color: '#d29922' }}>
+                      {report.degradation_rate}
+                    </div>
+                    <div className="mt-0.5 font-mono text-[11px]" style={{ color: '#6e7681' }}>RPS · latency slope &gt;50%</div>
                   </div>
 
-                  <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                    <span className="text-xs font-semibold text-slate-500">
+                  <div className="rounded p-4" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
+                    <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>
                       Safety Breach Rate
-                    </span>
-                    <div className="mt-2 text-2xl font-black text-rose-600 dark:text-rose-400">
-                      {report.safety_boundary_rate} RPS
                     </div>
-                    <span className="text-[11px] text-slate-400">Hard boundary breach</span>
+                    <div className="mt-2 font-mono text-2xl font-bold" style={{ color: '#f85149' }}>
+                      {report.safety_boundary_rate}
+                    </div>
+                    <div className="mt-0.5 font-mono text-[11px]" style={{ color: '#6e7681' }}>RPS · hard boundary breach</div>
                   </div>
 
-                  <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                    <span className="text-xs font-semibold text-slate-500">
+                  <div className="rounded p-4" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
+                    <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>
                       Recovery Time
-                    </span>
-                    <div className="mt-2 text-2xl font-black text-indigo-600 dark:text-indigo-400">
+                    </div>
+                    <div className="mt-2 font-mono text-2xl font-bold" style={{ color: '#58a6ff' }}>
                       {report.recovery_time_sec}s
                     </div>
-                    <span className="text-[11px] text-slate-400">Return to baseline SLA</span>
+                    <div className="mt-0.5 font-mono text-[11px]" style={{ color: '#6e7681' }}>return to baseline SLA</div>
                   </div>
                 </div>
 
                 {/* Recommendations */}
-                <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-800 dark:bg-slate-900 space-y-3">
-                  <h3 className="font-bold text-slate-900 dark:text-white">
+                <div
+                  className="rounded p-4 space-y-3"
+                  style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
+                >
+                  <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>
                     Automated Engineering Recommendations
-                  </h3>
+                  </div>
                   {report.recommendations && report.recommendations.length > 0 ? (
-                    <ul className="space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                    <ul className="space-y-2">
                       {report.recommendations.map((rec, i) => (
-                        <li key={i} className="flex items-start gap-2">
-                          <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
-                          <span>{rec}</span>
+                        <li key={i} className="flex items-start gap-2 text-xs">
+                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 mt-0.5" style={{ color: '#3fb950' }} />
+                          <span style={{ color: '#8b949e' }}>{rec}</span>
                         </li>
                       ))}
                     </ul>
                   ) : (
-                    <p className="text-xs text-slate-500">
+                    <p className="text-[11px]" style={{ color: '#6e7681' }}>
                       System operated within normal operational thresholds. No auto-remediations required.
                     </p>
                   )}

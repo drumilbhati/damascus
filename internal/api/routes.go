@@ -42,6 +42,7 @@ func NewRouter(h *Handler, opts ...RouterOption) http.Handler {
 	mux.HandleFunc("GET /api/experiments/{id}", h.GetExperiment)
 	mux.HandleFunc("GET /api/experiments/{id}/status", h.GetExperimentStatus)
 	mux.HandleFunc("GET /api/dependencies", h.GetDependencies)
+	mux.HandleFunc("GET /api/services", h.GetServices)
 	mux.HandleFunc("GET /api/experiments/{id}/report", h.GetExperimentReport)
 	mux.HandleFunc("GET /api/health", h.GetHealth)
 

@@ -104,6 +104,11 @@ type DependenciesResponse struct {
 	Scores []graph.ServiceScore   `json:"scores"`
 }
 
+// ServicesResponse is the response body for GET /api/services.
+type ServicesResponse struct {
+	Services []string `json:"services"`
+}
+
 // ErrorResponse represents a standardized API error format.
 type ErrorResponse struct {
 	Error string `json:"error"`
@@ -616,6 +621,7 @@ func (h *Handler) GetExperimentReport(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, report)
 }
 
+<<<<<<< HEAD
 // prefersHTML evaluates request format query parameter and HTTP Accept header quality values (RFC 7231).
 // Explicit format takes precedence (?format=html -> true, ?format=json -> false).
 // Accept: text/html is only selected when quality q > 0 and higher than application/json.
@@ -671,6 +677,30 @@ func prefersHTML(r *http.Request) bool {
 
 	// Select HTML if acceptable and either JSON is not requested or HTML has strictly higher quality
 	return qJSON < 0 || qHTML > qJSON
+=======
+// GetServices handles GET /api/services.
+// It fetches the list of currently known services from Jaeger via the graph analyzer
+// by building a lightweight dependency graph and extracting unique node names.
+func (h *Handler) GetServices(w http.ResponseWriter, r *http.Request) {
+	if h.graphAnalyzer == nil {
+		h.writeError(w, http.StatusInternalServerError, "graph analyzer is not configured")
+		return
+	}
+
+	// Use a short lookback (last 1 hour) to get recently active services.
+	depGraph, err := h.graphAnalyzer.BuildGraph(r.Context(), 3600)
+	if err != nil {
+		h.handleServiceError(w, err, "get_services")
+		return
+	}
+
+	services := make([]string, 0, len(depGraph.Nodes))
+	for name := range depGraph.Nodes {
+		services = append(services, name)
+	}
+
+	h.writeJSON(w, http.StatusOK, ServicesResponse{Services: services})
+>>>>>>> ed39455 (feat: enhance ExperimentsPage with service discovery and improved UI)
 }
 
 // GetHealth handles GET /api/health

@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  damascus-ui:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: damascus-ui
+    restart: always
+    ports:
+      - "3000:80"
+    environment:
+      - PORT=80
+      - BACKEND_URL=http://host.docker.internal:8080/api/
+

@@ -131,3 +131,7 @@ export interface StartExperimentPayload {
 export interface StopExperimentPayload {
   reason?: string;
 }
+
+export interface ServicesResponse {
+  services: string[];
+}

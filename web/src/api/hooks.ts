@@ -6,6 +6,7 @@ import type {
   DependenciesResponse,
   HealthStatus,
   ExperimentReport,
+  ServicesResponse,
 } from '../types';
 
 export const useHealth = (refreshInterval = 15000) => {
@@ -58,6 +59,19 @@ export const useExperimentReport = (id: string | null | undefined) => {
     defaultFetcher,
     {
       revalidateOnFocus: false,
+    }
+  );
+};
+
+// Fetches the list of services currently discovered in Jaeger traces.
+// Pass `enabled: true` only when the modal is open to avoid unnecessary calls.
+export const useServices = (enabled = false) => {
+  return useSWR<ServicesResponse>(
+    enabled ? '/services' : null,
+    defaultFetcher,
+    {
+      revalidateOnFocus: false,
+      shouldRetryOnError: false,
     }
   );
 };
