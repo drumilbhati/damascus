@@ -315,6 +315,17 @@ type ExperimentReport struct {
 	Recommendations        []string      `json:"recommendations"`
 	GeneratedAt            time.Time     `json:"generated_at"`
 }
+
+type RTOResult struct {
+	PreTestBaselineP95Ms float64       `json:"pre_test_baseline_p95_ms"`
+	ThresholdP95Ms       float64       `json:"threshold_p95_ms"`
+	TolerancePercent     float64       `json:"tolerance_percent"`
+	TerminationTime      time.Time     `json:"termination_time"`
+	RecoveryTime         time.Time     `json:"recovery_time,omitempty"`
+	RecoveryDuration     time.Duration `json:"recovery_duration"`
+	RecoveryDurationSec  int           `json:"recovery_duration_sec"`
+	Recovered            bool          `json:"recovered"`
+}
 ```
 
 ---
@@ -397,6 +408,12 @@ type SafetyController interface {
 type CapacityAnalyzer interface {
 	Analyze(observations []capacity.Observation, policy safety.SafetyPolicy) capacity.CapacityResult
 }
+
+// RTOCalculator computes post-stress microservice recovery time against pre-test baseline
+type RTOCalculator interface {
+	CalculateRTO(observations []capacity.Observation) (*capacity.RTOResult, error)
+	CalculateRTOWithBaseline(observations []capacity.Observation, baselineP95 float64) (*capacity.RTOResult, error)
+}
 ```
 
 The deterministic implementation `Analyzer` in `internal/capacity/analyzer.go` computes:
@@ -405,6 +422,11 @@ The deterministic implementation `Analyzer` in `internal/capacity/analyzer.go` c
 - **`DegradationRate`**: Knee point where latency slope ($\Delta \text{Latency} / \Delta \text{LoadRate}$) increases by $> 50\%$ relative to the preceding slope, or where the preceding slope was zero or negative and the current slope is positive.
 - **`SafetyBoundaryRate`**: Lowest load rate where an SLA breach occurred, or maximum sustainable rate if no breach occurred.
 - **`RecoveryTimeSec`**: Duration from the start of post-stress zero-load conditions until telemetry recovers within SLA limits.
+
+The `BaselineCalculator` in `internal/capacity/metrics.go` calculates Recovery Time Objective (RTO):
+- **Pre-Test Baseline**: Computes baseline P95 latency from initial observations prior to load generation (or uses an explicitly configured baseline).
+- **Tolerance Threshold**: Establishes maximum allowable latency $\text{Threshold} = \text{Baseline}_{P95} \times (1 + \text{TolerancePercent}/100.0)$ (defaults to 10%).
+- **RTO Duration**: Measures the duration from load termination (first post-stress zero-load observation) until P95 latency returns within the 10% baseline threshold. Provides sub-second `RecoveryDuration`, integer `RecoveryDurationSec`, and `Recovered` status.
 
 ```go
 
