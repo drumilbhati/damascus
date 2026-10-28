@@ -121,8 +121,8 @@ func WithTransaction(ctx context.Context, db Transactor, fn TxFunc) error {
 }
 
 // WithTransactionOptions executes fn inside a managed transaction configured with sql.TxOptions.
-// If fn returns an error or panics, the transaction is safely rolled back.
-// If fn succeeds, the transaction is committed.
+// If fn returns an error, panics, or terminates early, the deferred rollback ensures
+// the transaction is not left uncommitted. If fn succeeds, the transaction is committed.
 func WithTransactionOptions(ctx context.Context, db Transactor, opts *sql.TxOptions, fn TxFunc) (err error) {
 	if db == nil {
 		return errors.New("database transactor cannot be nil")
@@ -137,25 +137,24 @@ func WithTransactionOptions(ctx context.Context, db Transactor, opts *sql.TxOpti
 	}
 
 	defer func() {
-		if p := recover(); p != nil {
-			// Roll back transaction on panic, then re-throw panic
-			_ = tx.Rollback()
-			panic(p)
-		} else if err != nil {
-			// Roll back transaction on operation error; ignore ErrTxDone if already rolled back
-			if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			if err != nil {
 				err = fmt.Errorf("transaction rollback failed: %v (original error: %w)", rbErr, err)
-			}
-		} else {
-			// Commit when callback completes without error
-			if commitErr := tx.Commit(); commitErr != nil {
-				err = fmt.Errorf("failed to commit transaction: %w", commitErr)
+			} else {
+				err = fmt.Errorf("transaction rollback failed: %w", rbErr)
 			}
 		}
 	}()
 
-	err = fn(tx)
-	return err
+	if err = fn(tx); err != nil {
+		return err
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return fmt.Errorf("failed to commit transaction: %w", commitErr)
+	}
+
+	return nil
 }
 
 // WithRepoTransaction executes fn with a PostgresExperimentRepository bound to a newly created transaction.

@@ -826,6 +826,8 @@ func TestOpenDB(t *testing.T) {
 
 // TestConfigureDB verifies that connection pool limits are properly configured on *sql.DB.
 func TestConfigureDB(t *testing.T) {
+	ctx := context.Background()
+
 	t.Run("sets connection pool parameters", func(t *testing.T) {
 		db, _ := newMockDB(t)
 		storage.ConfigureDB(db)
@@ -833,6 +835,101 @@ func TestConfigureDB(t *testing.T) {
 		stats := db.Stats()
 		if stats.MaxOpenConnections != storage.DefaultMaxOpenConns {
 			t.Errorf("expected MaxOpenConnections=%d, got %d", storage.DefaultMaxOpenConns, stats.MaxOpenConnections)
+		}
+	})
+
+	t.Run("enforces max idle connections limit", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("failed to create sqlmock: %v", err)
+		}
+		defer func() {
+			// One ExpectClose for each of the 5 idle connections remaining in pool when db.Close() is called
+			for i := 0; i < storage.DefaultMaxIdleConns; i++ {
+				mock.ExpectClose()
+			}
+			_ = db.Close()
+			if metErr := mock.ExpectationsWereMet(); metErr != nil {
+				t.Errorf("unfulfilled expectations: %v", metErr)
+			}
+		}()
+
+		storage.ConfigureDB(db)
+
+		// When the 6th connection is closed back to pool, it exceeds MaxIdleConns (5),
+		// so database/sql immediately closes it.
+		mock.ExpectClose()
+
+		// Acquire 6 connections (1 more than DefaultMaxIdleConns = 5)
+		conns := make([]*sql.Conn, storage.DefaultMaxIdleConns+1)
+		for i := range conns {
+			var connErr error
+			conns[i], connErr = db.Conn(ctx)
+			if connErr != nil {
+				t.Fatalf("failed to acquire connection %d: %v", i, connErr)
+			}
+		}
+
+		// Close all connections back to the pool
+		for _, c := range conns {
+			_ = c.Close()
+		}
+
+		stats := db.Stats()
+		if stats.Idle > storage.DefaultMaxIdleConns {
+			t.Errorf("idle connections (%d) exceeded configured limit (%d)", stats.Idle, storage.DefaultMaxIdleConns)
+		}
+		if stats.MaxIdleClosed != 1 {
+			t.Errorf("expected 1 connection closed due to max idle limit, got %d", stats.MaxIdleClosed)
+		}
+	})
+
+	t.Run("enforces connection max lifetime behavior", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("failed to create sqlmock: %v", err)
+		}
+		defer func() {
+			// One ExpectClose for the remaining connection closed during db.Close()
+			mock.ExpectClose()
+			_ = db.Close()
+			if metErr := mock.ExpectationsWereMet(); metErr != nil {
+				t.Errorf("unfulfilled expectations: %v", metErr)
+			}
+		}()
+
+		storage.ConfigureDB(db)
+		// Override lifetime to a short duration to test expiration behavior
+		db.SetConnMaxLifetime(10 * time.Millisecond)
+
+		// Hold an anchor connection open so sqlmock driver remains registered (c.opened > 0)
+		anchorConn, err := db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("failed to acquire anchor connection: %v", err)
+		}
+		defer anchorConn.Close()
+
+		conn, err := db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("failed to acquire connection: %v", err)
+		}
+		_ = conn.Close() // return to idle pool
+
+		time.Sleep(25 * time.Millisecond)
+
+		// When the next connection is requested, database/sql notices the idle connection has expired,
+		// closes it (first ExpectClose), and opens a fresh connection.
+		mock.ExpectClose()
+
+		conn2, err := db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("failed to acquire connection: %v", err)
+		}
+		defer conn2.Close()
+
+		stats := db.Stats()
+		if stats.MaxLifetimeClosed < 1 {
+			t.Errorf("expected at least 1 connection closed due to max lifetime, got %d", stats.MaxLifetimeClosed)
 		}
 	})
 
@@ -993,10 +1090,23 @@ func TestWithTransaction(t *testing.T) {
 	})
 }
 
-// TestWithTransactionOptions verifies custom transaction options (read-only, isolation level).
+// recordingTransactor records TxOptions passed to BeginTx to verify options propagation.
+type recordingTransactor struct {
+	db           *sql.DB
+	recordedOpts *sql.TxOptions
+}
+
+func (r *recordingTransactor) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+	r.recordedOpts = opts
+	return r.db.BeginTx(ctx, opts)
+}
+
+// TestWithTransactionOptions verifies custom transaction options (read-only, isolation level) are forwarded to BeginTx.
 func TestWithTransactionOptions(t *testing.T) {
 	ctx := context.Background()
 	db, mock := newMockDB(t)
+
+	rec := &recordingTransactor{db: db}
 
 	opts := &sql.TxOptions{
 		ReadOnly:  true,
@@ -1006,11 +1116,18 @@ func TestWithTransactionOptions(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectCommit()
 
-	err := storage.WithTransactionOptions(ctx, db, opts, func(tx *sql.Tx) error {
+	err := storage.WithTransactionOptions(ctx, rec, opts, func(tx *sql.Tx) error {
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("expected WithTransactionOptions to succeed, got %v", err)
+	}
+
+	if rec.recordedOpts == nil {
+		t.Fatal("expected recordedOpts to be non-nil")
+	}
+	if rec.recordedOpts.ReadOnly != opts.ReadOnly || rec.recordedOpts.Isolation != opts.Isolation {
+		t.Errorf("expected options %+v forwarded to BeginTx, got %+v", opts, rec.recordedOpts)
 	}
 }
 
