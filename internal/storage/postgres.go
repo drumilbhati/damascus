@@ -41,17 +41,149 @@ func NewPostgresExperimentRepository(db DBTX) *PostgresExperimentRepository {
 	return &PostgresExperimentRepository{db: db}
 }
 
-// OpenDB opens a connection to PostgreSQL using the provided connection string.
+// ============================================================================
+// Database Connection Pool Configuration
+// ----------------------------------------------------------------------------
+// PostgreSQL connection pooling configuration parameters for the Damascus
+// control plane. These limits prevent database connection exhaustion under
+// heavy experiment telemetry load and eliminate stale connection churn.
+// ============================================================================
+
+// Default connection pool configuration parameters for PostgreSQL persistence.
+const (
+	// DefaultMaxOpenConns caps the total number of simultaneous open connections (active + idle)
+	// to prevent exhausting PostgreSQL server process limits (typically 100 by default).
+	DefaultMaxOpenConns = 25
+
+	// DefaultMaxIdleConns keeps warm connections open in memory to eliminate TCP/TLS handshake latency
+	// on bursty telemetry write spikes.
+	DefaultMaxIdleConns = 5
+
+	// DefaultConnMaxLifetime closes and recycles connections after 5 minutes, preventing
+	// "connection reset by peer" errors caused by cloud NAT/firewall idle connection drops.
+	DefaultConnMaxLifetime = 5 * time.Minute
+)
+
+// ConfigureDB applies standard production connection pool limits to a *sql.DB handle.
+func ConfigureDB(db *sql.DB) {
+	if db == nil {
+		return
+	}
+
+	db.SetMaxOpenConns(DefaultMaxOpenConns)
+	db.SetMaxIdleConns(DefaultMaxIdleConns)
+	db.SetConnMaxLifetime(DefaultConnMaxLifetime)
+}
+
+// OpenDB opens a connection to PostgreSQL using the provided connection string,
+// configures production-ready connection pool limits (25 max open, 5 max idle, 5m max lifetime),
+// and verifies connectivity via Ping.
 func OpenDB(dsn string) (*sql.DB, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database connection: %w", err)
 	}
+
+	// Apply connection pool settings before pinging
+	ConfigureDB(db)
+
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 	return db, nil
+}
+
+// ============================================================================
+// Database Transaction Execution Helpers
+// ----------------------------------------------------------------------------
+// Provides atomic transaction lifecycle management for database operations:
+// - Transactor interface satisfied by *sql.DB (BeginTx)
+// - WithTransaction / WithTransactionOptions managing commit / rollback lifecycle
+// - Panic recovery with automatic rollback
+// - WithTx / WithRepoTransaction repository execution helpers
+// ============================================================================
+
+// Transactor defines the interface required to initiate a database transaction.
+// *sql.DB inherently implements this contract.
+type Transactor interface {
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
+// TxFunc is a callback function executed within the scope of a database transaction.
+type TxFunc func(tx *sql.Tx) error
+
+// WithTransaction executes the provided function fn within a managed database transaction.
+// If fn returns an error or panics, the transaction is safely rolled back.
+// If fn succeeds without error, the transaction is committed.
+func WithTransaction(ctx context.Context, db Transactor, fn TxFunc) error {
+	return WithTransactionOptions(ctx, db, nil, fn)
+}
+
+// WithTransactionOptions executes fn inside a managed transaction configured with sql.TxOptions.
+// If fn returns an error, panics, or terminates early, the deferred rollback ensures
+// the transaction is not left uncommitted. If fn succeeds, the transaction is committed.
+func WithTransactionOptions(ctx context.Context, db Transactor, opts *sql.TxOptions, fn TxFunc) (err error) {
+	if db == nil {
+		return errors.New("database transactor cannot be nil")
+	}
+	if fn == nil {
+		return errors.New("transaction callback function cannot be nil")
+	}
+
+	tx, txErr := db.BeginTx(ctx, opts)
+	if txErr != nil {
+		return fmt.Errorf("failed to begin transaction: %w", txErr)
+	}
+
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil && !errors.Is(rbErr, sql.ErrTxDone) {
+			if err != nil {
+				err = fmt.Errorf("transaction rollback failed: %v (original error: %w)", rbErr, err)
+			} else {
+				err = fmt.Errorf("transaction rollback failed: %w", rbErr)
+			}
+		}
+	}()
+
+	if err = fn(tx); err != nil {
+		return err
+	}
+
+	if commitErr := tx.Commit(); commitErr != nil {
+		return fmt.Errorf("failed to commit transaction: %w", commitErr)
+	}
+
+	return nil
+}
+
+// WithRepoTransaction executes fn with a PostgresExperimentRepository bound to a newly created transaction.
+// If fn returns an error or panics, all operations in the repository are rolled back.
+func WithRepoTransaction(ctx context.Context, db Transactor, fn func(repo *PostgresExperimentRepository) error) error {
+	if fn == nil {
+		return errors.New("repository transaction callback cannot be nil")
+	}
+
+	return WithTransaction(ctx, db, func(tx *sql.Tx) error {
+		txRepo := NewPostgresExperimentRepository(tx)
+		return fn(txRepo)
+	})
+}
+
+// WithTx executes the provided callback within an atomic transaction.
+// The repository's underlying DBTX must implement Transactor (e.g., *sql.DB).
+// A new PostgresExperimentRepository instance bound to the transaction is passed to fn.
+func (r *PostgresExperimentRepository) WithTx(ctx context.Context, fn func(repo *PostgresExperimentRepository) error) error {
+	if fn == nil {
+		return errors.New("transaction callback cannot be nil")
+	}
+
+	transactor, ok := r.db.(Transactor)
+	if !ok {
+		return errors.New("underlying database connection does not support transactions")
+	}
+
+	return WithRepoTransaction(ctx, transactor, fn)
 }
 
 // Create inserts a new experiment record into the database.

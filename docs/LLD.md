@@ -1125,6 +1125,35 @@ func NewPostgresExperimentRepository(db DBTX) *PostgresExperimentRepository
 - **`SaveServiceScores(ctx context.Context, expID string, scores []graph.ServiceScore) error`**: Persists criticality scores and JSON diagnostic reasons into `service_scores`.
 - **`GetServiceScores(ctx context.Context, expID string) ([]graph.ServiceScore, error)`**: Retrieves calculated service scores for an experiment ordered by `criticality_score DESC`.
 
+### 9.2 Database Connection Pooling & Transaction Execution Helpers
+
+Connection pooling parameters configured on `*sql.DB` in `internal/storage/postgres.go`:
+- **`DefaultMaxOpenConns`**: `25` (caps concurrent active connections to PostgreSQL).
+- **`DefaultMaxIdleConns`**: `5` (preserves warm idle connections in the pool).
+- **`DefaultConnMaxLifetime`**: `5 * time.Minute` (prevents stale connections and handles PostgreSQL idle timeouts gracefully).
+
+#### Helper Functions and Interfaces
+```go
+// Transactor abstracts transaction initiation, implemented by *sql.DB.
+type Transactor interface {
+	BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+}
+
+// TxFunc is a callback executed within a transaction boundary.
+type TxFunc func(tx *sql.Tx) error
+
+func ConfigureDB(db *sql.DB)
+func OpenDB(dsn string) (*sql.DB, error)
+func WithTransaction(ctx context.Context, db Transactor, fn TxFunc) error
+func WithTransactionOptions(ctx context.Context, db Transactor, opts *sql.TxOptions, fn TxFunc) error
+func WithRepoTransaction(ctx context.Context, db Transactor, fn func(repo *PostgresExperimentRepository) error) error
+func (r *PostgresExperimentRepository) WithTx(ctx context.Context, fn func(repo *PostgresExperimentRepository) error) error
+```
+
+- **`ConfigureDB(db *sql.DB)`**: Sets `MaxOpenConns(25)`, `MaxIdleConns(5)`, and `ConnMaxLifetime(5 * time.Minute)`.
+- **`WithTransaction` / `WithTransactionOptions`**: Safely manages `BeginTx`, `Commit`, and automatic `Rollback` upon error or panic.
+- **`WithRepoTransaction` / `r.WithTx`**: Executes repository mutations atomically under a single database transaction.
+
 ---
 
 ## 10. REST API Specification

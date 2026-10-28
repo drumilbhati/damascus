@@ -823,3 +823,446 @@ func TestOpenDB(t *testing.T) {
 		t.Error("expected error when connecting to unreachable database, got nil")
 	}
 }
+
+// TestConfigureDB verifies that connection pool limits are properly configured on *sql.DB.
+func TestConfigureDB(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("sets connection pool parameters", func(t *testing.T) {
+		db, _ := newMockDB(t)
+		storage.ConfigureDB(db)
+
+		stats := db.Stats()
+		if stats.MaxOpenConnections != storage.DefaultMaxOpenConns {
+			t.Errorf("expected MaxOpenConnections=%d, got %d", storage.DefaultMaxOpenConns, stats.MaxOpenConnections)
+		}
+	})
+
+	t.Run("enforces max idle connections limit", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("failed to create sqlmock: %v", err)
+		}
+		defer func() {
+			// One ExpectClose for each of the 5 idle connections remaining in pool when db.Close() is called
+			for i := 0; i < storage.DefaultMaxIdleConns; i++ {
+				mock.ExpectClose()
+			}
+			_ = db.Close()
+			if metErr := mock.ExpectationsWereMet(); metErr != nil {
+				t.Errorf("unfulfilled expectations: %v", metErr)
+			}
+		}()
+
+		storage.ConfigureDB(db)
+
+		// When the 6th connection is closed back to pool, it exceeds MaxIdleConns (5),
+		// so database/sql immediately closes it.
+		mock.ExpectClose()
+
+		// Acquire 6 connections (1 more than DefaultMaxIdleConns = 5)
+		conns := make([]*sql.Conn, storage.DefaultMaxIdleConns+1)
+		for i := range conns {
+			var connErr error
+			conns[i], connErr = db.Conn(ctx)
+			if connErr != nil {
+				t.Fatalf("failed to acquire connection %d: %v", i, connErr)
+			}
+		}
+
+		// Close all connections back to the pool
+		for _, c := range conns {
+			_ = c.Close()
+		}
+
+		stats := db.Stats()
+		if stats.Idle > storage.DefaultMaxIdleConns {
+			t.Errorf("idle connections (%d) exceeded configured limit (%d)", stats.Idle, storage.DefaultMaxIdleConns)
+		}
+		if stats.MaxIdleClosed != 1 {
+			t.Errorf("expected 1 connection closed due to max idle limit, got %d", stats.MaxIdleClosed)
+		}
+	})
+
+	t.Run("enforces connection max lifetime behavior", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("failed to create sqlmock: %v", err)
+		}
+		defer func() {
+			// One ExpectClose for the remaining connection closed during db.Close()
+			mock.ExpectClose()
+			_ = db.Close()
+			if metErr := mock.ExpectationsWereMet(); metErr != nil {
+				t.Errorf("unfulfilled expectations: %v", metErr)
+			}
+		}()
+
+		storage.ConfigureDB(db)
+		// Override lifetime to a short duration to test expiration behavior
+		db.SetConnMaxLifetime(10 * time.Millisecond)
+
+		// Hold an anchor connection open so sqlmock driver remains registered (c.opened > 0)
+		anchorConn, err := db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("failed to acquire anchor connection: %v", err)
+		}
+		defer anchorConn.Close()
+
+		conn, err := db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("failed to acquire connection: %v", err)
+		}
+		_ = conn.Close() // return to idle pool
+
+		time.Sleep(25 * time.Millisecond)
+
+		// When the next connection is requested, database/sql notices the idle connection has expired,
+		// closes it (first ExpectClose), and opens a fresh connection.
+		mock.ExpectClose()
+
+		conn2, err := db.Conn(ctx)
+		if err != nil {
+			t.Fatalf("failed to acquire connection: %v", err)
+		}
+		defer conn2.Close()
+
+		stats := db.Stats()
+		if stats.MaxLifetimeClosed < 1 {
+			t.Errorf("expected at least 1 connection closed due to max lifetime, got %d", stats.MaxLifetimeClosed)
+		}
+	})
+
+	t.Run("handles nil db safely", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("ConfigureDB(nil) panicked: %v", r)
+			}
+		}()
+		storage.ConfigureDB(nil)
+	})
+}
+
+// TestWithTransaction verifies transaction execution lifecycle, commit, rollback, and error handling.
+func TestWithTransaction(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("commit on success", func(t *testing.T) {
+		db, mock := newMockDB(t)
+		mock.ExpectBegin()
+		mock.ExpectExec(regexp.QuoteMeta("UPDATE experiments SET status = $1 WHERE id = $2")).
+			WithArgs("COMPLETED", "exp-1").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
+
+		executed := false
+		err := storage.WithTransaction(ctx, db, func(tx *sql.Tx) error {
+			executed = true
+			_, execErr := tx.ExecContext(ctx, "UPDATE experiments SET status = $1 WHERE id = $2", "COMPLETED", "exp-1")
+			return execErr
+		})
+
+		if err != nil {
+			t.Fatalf("expected WithTransaction to succeed, got error: %v", err)
+		}
+		if !executed {
+			t.Errorf("expected transaction callback to be executed")
+		}
+	})
+
+	t.Run("rollback on error", func(t *testing.T) {
+		db, mock := newMockDB(t)
+		expectedErr := errors.New("simulated operational error")
+
+		mock.ExpectBegin()
+		mock.ExpectExec(regexp.QuoteMeta("DELETE FROM experiments WHERE id = $1")).
+			WithArgs("exp-1").
+			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectRollback()
+
+		err := storage.WithTransaction(ctx, db, func(tx *sql.Tx) error {
+			_, _ = tx.ExecContext(ctx, "DELETE FROM experiments WHERE id = $1", "exp-1")
+			return expectedErr
+		})
+
+		if err == nil {
+			t.Fatal("expected error from WithTransaction, got nil")
+		}
+		if !errors.Is(err, expectedErr) {
+			t.Fatalf("expected error wrapping %v, got %v", expectedErr, err)
+		}
+	})
+
+	t.Run("rollback on panic and re-panics", func(t *testing.T) {
+		db, mock := newMockDB(t)
+		mock.ExpectBegin()
+		mock.ExpectRollback()
+
+		panicked := false
+		defer func() {
+			r := recover()
+			if r != nil {
+				panicked = true
+				if r != "unhandled panic inside transaction" {
+					t.Errorf("unexpected panic value: %v", r)
+				}
+			}
+			if !panicked {
+				t.Errorf("expected panic to be re-thrown after rollback")
+			}
+		}()
+
+		_ = storage.WithTransaction(ctx, db, func(tx *sql.Tx) error {
+			panic("unhandled panic inside transaction")
+		})
+	})
+
+	t.Run("begin transaction failure", func(t *testing.T) {
+		db, mock := newMockDB(t)
+		beginErr := errors.New("database connection refused")
+		mock.ExpectBegin().WillReturnError(beginErr)
+
+		err := storage.WithTransaction(ctx, db, func(tx *sql.Tx) error {
+			return nil
+		})
+
+		if err == nil {
+			t.Fatal("expected error when BeginTx fails, got nil")
+		}
+		if !errors.Is(err, beginErr) {
+			t.Fatalf("expected error wrapping %v, got %v", beginErr, err)
+		}
+	})
+
+	t.Run("commit failure returns error", func(t *testing.T) {
+		db, mock := newMockDB(t)
+		commitErr := errors.New("commit failed: serialization failure")
+		mock.ExpectBegin()
+		mock.ExpectCommit().WillReturnError(commitErr)
+
+		err := storage.WithTransaction(ctx, db, func(tx *sql.Tx) error {
+			return nil
+		})
+
+		if err == nil {
+			t.Fatal("expected commit error, got nil")
+		}
+		if !errors.Is(err, commitErr) {
+			t.Fatalf("expected error wrapping %v, got %v", commitErr, err)
+		}
+	})
+
+	t.Run("rollback failure wraps original error", func(t *testing.T) {
+		db, mock := newMockDB(t)
+		origErr := errors.New("callback failed")
+		rbErr := errors.New("connection broken during rollback")
+
+		mock.ExpectBegin()
+		mock.ExpectRollback().WillReturnError(rbErr)
+
+		err := storage.WithTransaction(ctx, db, func(tx *sql.Tx) error {
+			return origErr
+		})
+
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, origErr) {
+			t.Fatalf("expected error wrapping %v, got %v", origErr, err)
+		}
+	})
+
+	t.Run("nil transactor returns error", func(t *testing.T) {
+		err := storage.WithTransaction(ctx, nil, func(tx *sql.Tx) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("expected error with nil transactor, got nil")
+		}
+	})
+
+	t.Run("nil callback returns error", func(t *testing.T) {
+		db, _ := newMockDB(t)
+		err := storage.WithTransaction(ctx, db, nil)
+		if err == nil {
+			t.Fatal("expected error with nil callback function, got nil")
+		}
+	})
+}
+
+// recordingTransactor records TxOptions passed to BeginTx to verify options propagation.
+type recordingTransactor struct {
+	db           *sql.DB
+	recordedOpts *sql.TxOptions
+}
+
+func (r *recordingTransactor) BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error) {
+	r.recordedOpts = opts
+	return r.db.BeginTx(ctx, opts)
+}
+
+// TestWithTransactionOptions verifies custom transaction options (read-only, isolation level) are forwarded to BeginTx.
+func TestWithTransactionOptions(t *testing.T) {
+	ctx := context.Background()
+	db, mock := newMockDB(t)
+
+	rec := &recordingTransactor{db: db}
+
+	opts := &sql.TxOptions{
+		ReadOnly:  true,
+		Isolation: sql.LevelSerializable,
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectCommit()
+
+	err := storage.WithTransactionOptions(ctx, rec, opts, func(tx *sql.Tx) error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("expected WithTransactionOptions to succeed, got %v", err)
+	}
+
+	if rec.recordedOpts == nil {
+		t.Fatal("expected recordedOpts to be non-nil")
+	}
+	if rec.recordedOpts.ReadOnly != opts.ReadOnly || rec.recordedOpts.Isolation != opts.Isolation {
+		t.Errorf("expected options %+v forwarded to BeginTx, got %+v", opts, rec.recordedOpts)
+	}
+}
+
+// TestWithRepoTransaction verifies transaction management using repository helpers.
+func TestWithRepoTransaction(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("successful execution", func(t *testing.T) {
+		db, mock := newMockDB(t)
+		mock.ExpectBegin()
+		mock.ExpectCommit()
+
+		called := false
+		err := storage.WithRepoTransaction(ctx, db, func(repo *storage.PostgresExperimentRepository) error {
+			called = true
+			if repo == nil {
+				return errors.New("expected non-nil repo")
+			}
+			return nil
+		})
+
+		if err != nil {
+			t.Fatalf("expected WithRepoTransaction to succeed, got %v", err)
+		}
+		if !called {
+			t.Error("expected callback to be executed")
+		}
+	})
+
+	t.Run("nil callback returns error", func(t *testing.T) {
+		db, _ := newMockDB(t)
+		err := storage.WithRepoTransaction(ctx, db, nil)
+		if err == nil {
+			t.Fatal("expected error with nil repo callback, got nil")
+		}
+	})
+}
+
+// TestPostgresExperimentRepository_WithTx verifies repository instance WithTx method.
+func TestPostgresExperimentRepository_WithTx(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("successful transactional repository execution", func(t *testing.T) {
+		db, mock := newMockDB(t)
+		repo := storage.NewPostgresExperimentRepository(db)
+
+		now := time.Now().UTC()
+		exp := &experiment.Experiment{
+			ID:            "exp-tx-1",
+			TargetService: "paymentservice",
+			TargetURL:     "http://payment:8080/pay",
+			Type:          experiment.ExperimentStep,
+			State:         experiment.StateCreated,
+			Config: experiment.ExperimentConfig{
+				InitialRate:         10,
+				StepRate:            5,
+				MaxRate:             30,
+				StepDurationSeconds: 5,
+				MaxP95LatencyMs:     200.0,
+				MaxErrorRatePercent: 2.0,
+				MinAvailabilityPct:  99.5,
+				RecoveryWindowSec:   15,
+			},
+			CreatedAt: now,
+		}
+
+		mock.ExpectBegin()
+		mock.ExpectExec(regexp.QuoteMeta("INSERT INTO experiments")).
+			WithArgs(
+				exp.ID,
+				exp.TargetService,
+				exp.TargetURL,
+				string(exp.Type),
+				string(exp.State),
+				exp.Config.InitialRate,
+				exp.Config.StepRate,
+				exp.Config.MaxRate,
+				exp.Config.StepDurationSeconds,
+				exp.Config.MaxP95LatencyMs,
+				exp.Config.MaxErrorRatePercent,
+				exp.Config.MinAvailabilityPct,
+				exp.Config.RecoveryWindowSec,
+				nil,
+				nil,
+				nil,
+				now,
+			).
+			WillReturnResult(sqlmock.NewResult(1, 1))
+		mock.ExpectCommit()
+
+		err := repo.WithTx(ctx, func(txRepo *storage.PostgresExperimentRepository) error {
+			return txRepo.Create(ctx, exp)
+		})
+
+		if err != nil {
+			t.Fatalf("expected WithTx to succeed, got %v", err)
+		}
+	})
+
+	t.Run("unsupported transactor error", func(t *testing.T) {
+		// Construct repository with an interface that does NOT satisfy Transactor
+		fakeDBTX := &mockNonTransactor{}
+		repo := storage.NewPostgresExperimentRepository(fakeDBTX)
+
+		err := repo.WithTx(ctx, func(txRepo *storage.PostgresExperimentRepository) error {
+			return nil
+		})
+		if err == nil {
+			t.Fatal("expected error when DB does not support transactions, got nil")
+		}
+	})
+
+	t.Run("nil callback returns error", func(t *testing.T) {
+		db, _ := newMockDB(t)
+		repo := storage.NewPostgresExperimentRepository(db)
+
+		err := repo.WithTx(ctx, nil)
+		if err == nil {
+			t.Fatal("expected error with nil callback, got nil")
+		}
+	})
+}
+
+// mockNonTransactor implements DBTX but does not implement Transactor
+type mockNonTransactor struct{}
+
+func (m *mockNonTransactor) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return nil, nil
+}
+func (m *mockNonTransactor) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
+	return nil, nil
+}
+func (m *mockNonTransactor) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return nil, nil
+}
+func (m *mockNonTransactor) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return nil
+}
