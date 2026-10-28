@@ -10,6 +10,7 @@ import (
 	"damascus/internal/capacity"
 	"damascus/internal/experiment"
 	"damascus/internal/graph"
+	"damascus/internal/report"
 	"damascus/internal/safety"
 	"damascus/internal/stress"
 	"damascus/internal/watcher"
@@ -383,5 +384,105 @@ func TestManager_RecoveryWindow_ShutdownAborts(t *testing.T) {
 	}
 	if status.State != experiment.StateAborted {
 		t.Errorf("expected state %s on shutdown during recovery, got %s", experiment.StateAborted, status.State)
+	}
+}
+
+func TestManager_Pipeline_WithReportGenerator(t *testing.T) {
+	repo := newMockRepo()
+	stressEng := newMockStressEngine()
+	mockW := newMockWatcher()
+	reportGen := report.NewGenerator()
+
+	mgr := experiment.NewManager(
+		nil,
+		stressEng,
+		mockW,
+		&mockSafetyController{},
+		&mockCapacityAnalyzer{},
+		reportGen,
+		repo,
+	)
+
+	exp, err := mgr.CreateExperiment(context.Background(), "payment-service", "http://payment:8080/pay", experiment.ExperimentStep, experiment.ExperimentConfig{
+		InitialRate:         10,
+		StepRate:            10,
+		MaxRate:             50,
+		StepDurationSeconds: 1,
+		MaxP95LatencyMs:     200,
+		MaxErrorRatePercent: 5,
+		MinAvailabilityPct:  99,
+		RecoveryWindowSec:   0,
+	})
+	if err != nil {
+		t.Fatalf("failed to create experiment: %v", err)
+	}
+
+	plan := stress.LoadPlan{
+		TargetURL:           "http://payment:8080/pay",
+		Method:              "POST",
+		InitialRate:         10,
+		StepRate:            10,
+		MaxRate:             50,
+		StepDurationSeconds: 1,
+	}
+
+	if err := mgr.StartExperiment(context.Background(), exp.ID, plan); err != nil {
+		t.Fatalf("failed to start experiment: %v", err)
+	}
+
+	// Unblock stress engine so it completes the experiment pipeline
+	stressEng.Unblock()
+
+	// Bounded poll until experiment reaches StateCompleted or deadline expires
+	var lastStatus *experiment.Experiment
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		status, err := mgr.GetStatus(context.Background(), exp.ID)
+		if err != nil {
+			t.Fatalf("failed to get status during polling: %v", err)
+		}
+		lastStatus = status
+		if status.State == experiment.StateCompleted {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if lastStatus == nil || lastStatus.State != experiment.StateCompleted {
+		t.Fatalf("expected state %s within deadline, got: %v", experiment.StateCompleted, lastStatus)
+	}
+
+	rep, err := repo.GetReport(context.Background(), exp.ID)
+	if err != nil {
+		t.Fatalf("failed to get generated report: %v", err)
+	}
+	if rep == nil {
+		t.Fatal("expected report to be saved in repository, got nil")
+	}
+	if rep.ExperimentID != exp.ID {
+		t.Errorf("expected report experiment ID %s, got %s", exp.ID, rep.ExperimentID)
+	}
+	if rep.TargetService != "payment-service" {
+		t.Errorf("expected target service 'payment-service', got %s", rep.TargetService)
+	}
+	if len(rep.Recommendations) == 0 {
+		t.Error("expected recommendations to be populated by report generator")
+	}
+
+	// Verify the report can be rendered to HTML and JSON
+	htmlBytes, err := reportGen.RenderHTML(rep)
+	if err != nil {
+		t.Fatalf("failed to render HTML for manager report: %v", err)
+	}
+	if len(htmlBytes) == 0 {
+		t.Error("expected non-empty HTML bytes")
+	}
+
+	jsonBytes, err := reportGen.RenderJSON(rep)
+	if err != nil {
+		t.Fatalf("failed to render JSON for manager report: %v", err)
+	}
+	if len(jsonBytes) == 0 {
+		t.Error("expected non-empty JSON bytes")
 	}
 }

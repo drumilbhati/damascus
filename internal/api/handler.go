@@ -14,6 +14,7 @@ import (
 	"damascus/internal/capacity"
 	"damascus/internal/experiment"
 	"damascus/internal/graph"
+	reportpkg "damascus/internal/report"
 	"damascus/internal/storage"
 	"damascus/internal/stress"
 	"damascus/internal/watcher"
@@ -28,6 +29,9 @@ var (
 	ErrConflict   = errors.New("state conflict")
 	ErrBadRequest = errors.New("invalid request")
 )
+
+// defaultReportEngine is a shared singleton for rendering HTML reports when no custom engine is injected.
+var defaultReportEngine = reportpkg.NewGenerator()
 
 // ClientError represents a client-side error with a specific HTTP status code.
 type ClientError struct {
@@ -112,11 +116,19 @@ type Handler struct {
 	graphAnalyzer    GraphAnalyzer
 	snapshotProvider SnapshotProvider
 	checker          ObservabilityChecker
+	reportEngine     reportpkg.ReportEngine
 	logger           *slog.Logger
 }
 
 // HandlerOption configures dependencies for Handler.
 type HandlerOption func(*Handler)
+
+// WithReportEngine injects a ReportEngine for multi-format report exports.
+func WithReportEngine(re reportpkg.ReportEngine) HandlerOption {
+	return func(h *Handler) {
+		h.reportEngine = re
+	}
+}
 
 // WithSnapshotProvider injects a SnapshotProvider.
 func WithSnapshotProvider(sp SnapshotProvider) HandlerOption {
@@ -582,7 +594,83 @@ func (h *Handler) GetExperimentReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Always vary cached representations by Accept header
+	w.Header().Set("Vary", "Accept")
+
+	if prefersHTML(r) {
+		engine := h.reportEngine
+		if engine == nil {
+			engine = defaultReportEngine
+		}
+		htmlBytes, err := engine.RenderHTML(report)
+		if err != nil {
+			h.handleServiceError(w, err, "render_html_report")
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(htmlBytes)
+		return
+	}
+
 	h.writeJSON(w, http.StatusOK, report)
+}
+
+// prefersHTML evaluates request format query parameter and HTTP Accept header quality values (RFC 7231).
+// Explicit format takes precedence (?format=html -> true, ?format=json -> false).
+// Accept: text/html is only selected when quality q > 0 and higher than application/json.
+func prefersHTML(r *http.Request) bool {
+	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
+	if format == "html" {
+		return true
+	}
+	if format != "" {
+		return false
+	}
+
+	accept := r.Header.Get("Accept")
+	if strings.TrimSpace(accept) == "" {
+		return false
+	}
+
+	var qHTML, qJSON float64 = -1.0, -1.0
+
+	for _, clause := range strings.Split(accept, ",") {
+		clause = strings.TrimSpace(clause)
+		if clause == "" {
+			continue
+		}
+		parts := strings.Split(clause, ";")
+		media := strings.TrimSpace(strings.ToLower(parts[0]))
+		q := 1.0
+		for _, param := range parts[1:] {
+			param = strings.TrimSpace(param)
+			if strings.HasPrefix(strings.ToLower(param), "q=") {
+				if parsed, err := strconv.ParseFloat(param[2:], 64); err == nil {
+					q = parsed
+				}
+			}
+		}
+
+		switch media {
+		case "text/html":
+			if q > qHTML {
+				qHTML = q
+			}
+		case "application/json":
+			if q > qJSON {
+				qJSON = q
+			}
+		}
+	}
+
+	// Do not treat q <= 0 as acceptable
+	if qHTML <= 0 {
+		return false
+	}
+
+	// Select HTML if acceptable and either JSON is not requested or HTML has strictly higher quality
+	return qJSON < 0 || qHTML > qJSON
 }
 
 // GetHealth handles GET /api/health
