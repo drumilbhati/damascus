@@ -1293,3 +1293,15 @@ App
   - `useExperimentStatus`: Fast 1s polling interval during active `RUNNING` state for live RED metrics.
   - `useDependencies`: On-demand trace dependency graph fetching with configurable lookback windows.
   - `useExperimentReport`: Caches completed capacity analysis reports.
+
+### 11.3 Interactive Dependency Graph Component
+
+- **Location**: `web/src/components/DependencyGraph.tsx`
+- **Core Visual Engine**: Powered by `@xyflow/react` (React Flow v12) and Dagre hierarchical layout (`@dagrejs/dagre`).
+- **Features & Capabilities**:
+  - **Service Node Topology**: Interactive node cards indicating service names, storage/database classifications, in/out degrees, and blast-radius criticality score badges (`CRITICAL ≥70%`, `HIGH 45-69%`, `MEDIUM 20-44%`, `LOW <20%`).
+  - **SPOF Highlighting**: Prominently flags Single Points of Failure with dedicated warning badges and glowing border states.
+  - **Directional Call Arrows**: Smoothstep edges with closed arrow markers (`MarkerType.ArrowClosed`) oriented from Caller (`from`) to Callee (`to`), animated traffic flows, and dynamic stroke widths proportional to request cadence.
+  - **Interactive Controls & Search**: Instant substring service search, criticality filter toggles (`All`, `High Criticality`, `SPOFs`), and orientation toggles (`Left → Right` vs. `Top ↓ Bottom`).
+  - **Service Inspector Drawer**: Contextual slide-out panel detailing scoring rationale, traffic volume summaries, and inbound caller / outbound callee dependency tables with one-click chaos experiment targeting.
+
