@@ -39,7 +39,7 @@ import (
 //   - PORT: HTTP server listen port (e.g., "8080")
 //   - POSTGRES_DSN: Connection URI for PostgreSQL database
 //   - PROMETHEUS_URL: Base URL for Prometheus query API
-//   - JAEGER_URL: Base URL for Jaeger trace ingestion API
+//   - JAEGER_URL: Base URL for Jaeger query API
 //   - KAFKA_BROKERS: Comma-separated Kafka broker addresses
 //   - TARGET_BASE_URL: Base URL for target microservice mesh under test
 // ============================================================================
@@ -126,9 +126,20 @@ type healthCheckerAdapter struct {
 func (a *healthCheckerAdapter) CheckHealth(ctx context.Context) (map[string]string, error) {
 	status, err := a.checker.CheckObservabilityStack(ctx, a.cfg)
 	if err != nil {
+		targetStatus := "UNREACHABLE"
+		jaegerStatus := "UNREACHABLE"
+		promStatus := "UNREACHABLE"
+		if status != nil {
+			targetStatus = status.Target
+			jaegerStatus = status.Jaeger
+			promStatus = status.Prometheus
+		}
 		return map[string]string{
-			"status": "DOWN",
-			"error":  err.Error(),
+			"status":     "DOWN",
+			"target":     targetStatus,
+			"jaeger":     jaegerStatus,
+			"prometheus": promStatus,
+			"error":      err.Error(),
 		}, err
 	}
 	return map[string]string{
@@ -140,13 +151,19 @@ func (a *healthCheckerAdapter) CheckHealth(ctx context.Context) (map[string]stri
 }
 
 func main() {
+	if err := run(); err != nil {
+		slog.Error("fatal error", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
 	cfg, err := LoadConfig()
 	if err != nil {
-		logger.Error("failed to load configuration from environment", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to load configuration from environment: %w", err)
 	}
 
 	logger.Info("starting damascus control plane",
@@ -160,19 +177,15 @@ func main() {
 	// 1. Initialize PostgreSQL database connection pool
 	db, err := storage.OpenDB(cfg.PostgresDSN)
 	if err != nil {
-		logger.Warn("database connection unavailable at startup; proceeding with degraded mode", "error", err)
-	} else {
-		defer db.Close()
-		logger.Info("connected to postgres database with connection pooling",
-			"max_open_conns", storage.DefaultMaxOpenConns,
-			"max_idle_conns", storage.DefaultMaxIdleConns,
-		)
+		return fmt.Errorf("failed to connect to postgres database: %w", err)
 	}
+	defer db.Close()
+	logger.Info("connected to postgres database with connection pooling",
+		"max_open_conns", storage.DefaultMaxOpenConns,
+		"max_idle_conns", storage.DefaultMaxIdleConns,
+	)
 
-	var repo *storage.PostgresExperimentRepository
-	if db != nil {
-		repo = storage.NewPostgresExperimentRepository(db)
-	}
+	repo := storage.NewPostgresExperimentRepository(db)
 
 	// 2. Initialize HTTP client with connection reuse
 	httpClient := &http.Client{Timeout: 10 * time.Second}
@@ -181,7 +194,7 @@ func main() {
 	graphAnalyzer := graph.NewAnalyzer(cfg.JaegerURL, httpClient)
 	stressEngine := stress.NewEngine(httpClient)
 
-	var watcherEngine *watcher.WatcherEngine
+	var watcherEngine experiment.Watcher
 	promClient, promErr := watcher.NewPrometheusClient(cfg.PrometheusURL)
 	if promErr != nil {
 		logger.Warn("failed to initialize prometheus client; metrics polling disabled", "error", promErr)
@@ -248,8 +261,7 @@ func main() {
 
 	select {
 	case err := <-serverErrCh:
-		logger.Error("server failed to start", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("server startup failed: %w", err)
 	case sig := <-shutdownSignal:
 		logger.Info("shutdown signal received; commencing graceful shutdown", "signal", sig.String())
 	}
@@ -258,9 +270,10 @@ func main() {
 	defer shutdownCancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.Error("server graceful shutdown failed", "error", err)
-	} else {
-		logger.Info("server exited cleanly")
+		return fmt.Errorf("server graceful shutdown failed: %w", err)
 	}
+
+	logger.Info("server exited cleanly")
+	return nil
 
 }

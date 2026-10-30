@@ -180,16 +180,16 @@ The DAMASCUS control plane is packaged as a lightweight, secure container image 
 
 ### 6.2 Configuration & Environment Variables
 
-The control plane (`cmd/damascus/main.go`) dynamically configures itself via standard environment variables:
+The control plane (`cmd/damascus/main.go`) dynamically configures itself via environment variables. All six variables are required (no silent runtime fallback defaults):
 
-| Environment Variable | Default Value | Description |
+| Environment Variable | Example Value | Description |
 | :--- | :--- | :--- |
 | `PORT` | `8080` | HTTP listen port for the control plane REST API |
 | `POSTGRES_DSN` | `postgres://damascus:damascus@localhost:5432/damascus?sslmode=disable` | PostgreSQL connection URI |
 | `PROMETHEUS_URL` | `http://localhost:9090` | Base URL for Prometheus query API |
-| `JAEGER_URL` | `http://localhost:16686` | Base URL for Jaeger trace ingestion API |
-| `KAFKA_BROKERS` | `localhost:9092` | Comma-separated Kafka broker addresses |
-| `TARGET_BASE_URL` | `http://localhost:8080` | Default target microservice mesh endpoint |
+| `JAEGER_URL` | `http://localhost:16686` | Base URL for Jaeger query API |
+| `KAFKA_BROKERS` | `kafka:29092` | Comma-separated Kafka broker addresses |
+| `TARGET_BASE_URL` | `http://frontend:8080` | Target microservice mesh entrypoint |
 
 ### 6.3 Unified Docker Compose Orchestration (`docker-compose.yml`)
 
@@ -207,7 +207,7 @@ flowchart TD
 
     subgraph Backends["Storage & Streaming"]
         PG[("PostgreSQL 16 (:5432)")]
-        KAFKA{{"Kafka + Zookeeper (:9092)"}}
+        KAFKA{{"Kafka + Zookeeper (:9092, :29092)"}}
     end
 
     subgraph Observability["Telemetry Infrastructure"]
@@ -235,9 +235,14 @@ flowchart TD
 
 Run locally:
 ```bash
+cp .env.example .env
 docker compose up -d
 ```
 - **React Dashboard UI**: `http://localhost:3000`
+- **Control Plane REST API**: `http://localhost:8080/api/health`
+- **Jaeger Tracing Console**: `http://localhost:16686`
+- **Prometheus Console**: `http://localhost:9090`
+- **Astronomy Shop Frontend**: `http://localhost:8085`
 - **Control Plane REST API**: `http://localhost:8080/api/health`
 - **Jaeger Tracing Console**: `http://localhost:16686`
 - **Prometheus Console**: `http://localhost:9090`

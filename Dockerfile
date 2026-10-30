@@ -26,7 +26,7 @@
 # >>> YOUR CODE FOR TASK 3 STARTS HERE <<<
 
 # Stage 1: Build static Go binary
-FROM golang:alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
@@ -42,7 +42,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /bin/damascus ./cmd/damascus
 
 # Stage 2: Minimal runtime image
-FROM alpine:latest
+FROM alpine:3.20
 
 # Install runtime security certificates and timezone support
 RUN apk --no-cache add ca-certificates tzdata \

@@ -45,6 +45,12 @@ services:
       - JAEGER_URL=${JAEGER_URL}
       - KAFKA_BROKERS=${KAFKA_BROKERS}
       - TARGET_BASE_URL=${TARGET_BASE_URL}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 ${PORT} || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     depends_on:
       postgres:
         condition: service_healthy
@@ -69,7 +75,8 @@ services:
       - PORT=80
       - BACKEND_URL=http://damascus-control-plane:${PORT}/api/
     depends_on:
-      - damascus-control-plane
+      damascus-control-plane:
+        condition: service_healthy
     networks:
       - damascus-net
 
@@ -117,7 +124,9 @@ services:
       - KAFKA_BROKER_ID=1
       - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
       - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
-      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:9092
+      - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT_INTERNAL
       - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
       - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
     depends_on:

@@ -1,0 +1,12 @@
+.git
+.gitignore
+.env
+.env.*
+node_modules
+web/node_modules
+web/dist
+web
+*.test
+*.out
+damascus-state-machine-overview.html
+docs/damascus-state-machine-overview.html

@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -65,7 +68,41 @@ func TestLoadConfig_SuccessFromEnvironment(t *testing.T) {
 func TestHealthCheckerAdapter(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("successful probe", func(t *testing.T) {
+	t.Run("healthy stack", func(t *testing.T) {
+		// Mock healthy HTTP server handling probe requests
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.URL.Path, "/api/v1/query") {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+
+		checker := observability.NewChecker(1 * time.Second)
+		adapter := &healthCheckerAdapter{
+			checker: checker,
+			cfg: config.EnvironmentConfig{
+				TargetBaseURL:      server.URL,
+				JaegerTraceBaseURL: server.URL,
+				PrometheusBaseURL:  server.URL,
+			},
+		}
+
+		res, err := adapter.CheckHealth(ctx)
+		if err != nil {
+			t.Fatalf("expected healthy stack to succeed, got error: %v", err)
+		}
+		if res["status"] != "UP" {
+			t.Errorf("expected status UP, got %s", res["status"])
+		}
+		if res["target"] != "CONNECTED" || res["jaeger"] != "CONNECTED" || res["prometheus"] != "CONNECTED" {
+			t.Errorf("expected all services CONNECTED, got %+v", res)
+		}
+	})
+
+	t.Run("unreachable endpoints", func(t *testing.T) {
 		checker := observability.NewChecker(1 * time.Second)
 		adapter := &healthCheckerAdapter{
 			checker: checker,
@@ -83,6 +120,9 @@ func TestHealthCheckerAdapter(t *testing.T) {
 		if res["status"] != "DOWN" {
 			t.Errorf("expected status DOWN for unreachable stack, got %s", res["status"])
 		}
+		if res["target"] != "UNREACHABLE" || res["jaeger"] != "UNREACHABLE" || res["prometheus"] != "UNREACHABLE" {
+			t.Errorf("expected per-service UNREACHABLE statuses in error result, got %+v", res)
+		}
 	})
 
 	t.Run("mock error handling", func(t *testing.T) {
@@ -99,6 +139,9 @@ func TestHealthCheckerAdapter(t *testing.T) {
 		}
 		if res == nil || res["status"] != "DOWN" {
 			t.Errorf("expected result status DOWN, got %+v", res)
+		}
+		if res["target"] != "UNREACHABLE" {
+			t.Errorf("expected target UNREACHABLE, got %s", res["target"])
 		}
 	})
 }
