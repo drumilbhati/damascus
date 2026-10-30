@@ -1,0 +1,294 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"damascus/internal/api"
+	"damascus/internal/capacity"
+	"damascus/internal/config"
+	"damascus/internal/experiment"
+	"damascus/internal/graph"
+	"damascus/internal/observability"
+	"damascus/internal/report"
+	"damascus/internal/safety"
+	"damascus/internal/storage"
+	"damascus/internal/stress"
+	"damascus/internal/watcher"
+)
+
+// ============================================================================
+// TODO (User Practice): Phase 13.1 - Task 1: Environment Configuration
+// ----------------------------------------------------------------------------
+// Objective:
+//   Define the configuration structure and environment variable loader for the
+//   DAMASCUS control plane runtime.
+//
+// All configuration values MUST be supplied strictly via environment variables
+// (e.g., from an .env file or container environment); no hardcoded defaults are permitted.
+//
+// Required Environment Variables:
+//   - PORT: HTTP server listen port (e.g., "8080")
+//   - POSTGRES_DSN: Connection URI for PostgreSQL database
+//   - PROMETHEUS_URL: Base URL for Prometheus query API
+//   - JAEGER_URL: Base URL for Jaeger query API
+//   - KAFKA_BROKERS: Comma-separated Kafka broker addresses
+//   - TARGET_BASE_URL: Base URL for target microservice mesh under test
+// ============================================================================
+
+// Config holds runtime configuration options for the DAMASCUS control plane.
+type Config struct {
+	Port          string
+	PostgresDSN   string
+	PrometheusURL string
+	JaegerURL     string
+	KafkaBrokers  string
+	TargetBaseURL string
+}
+
+// LoadConfig reads configuration settings directly from system environment variables.
+// It verifies that all required variables (PORT, POSTGRES_DSN, PROMETHEUS_URL,
+// JAEGER_URL, KAFKA_BROKERS, and TARGET_BASE_URL) are set to non-empty values.
+// If any required variable is missing or blank, LoadConfig returns an error
+// detailing the missing parameters.
+func LoadConfig() (Config, error) {
+	cfg := Config{
+		Port:          strings.TrimSpace(os.Getenv("PORT")),
+		PostgresDSN:   strings.TrimSpace(os.Getenv("POSTGRES_DSN")),
+		PrometheusURL: strings.TrimSpace(os.Getenv("PROMETHEUS_URL")),
+		JaegerURL:     strings.TrimSpace(os.Getenv("JAEGER_URL")),
+		KafkaBrokers:  strings.TrimSpace(os.Getenv("KAFKA_BROKERS")),
+		TargetBaseURL: strings.TrimSpace(os.Getenv("TARGET_BASE_URL")),
+	}
+
+	var missing []string
+	if cfg.Port == "" {
+		missing = append(missing, "PORT")
+	}
+	if cfg.PostgresDSN == "" {
+		missing = append(missing, "POSTGRES_DSN")
+	}
+	if cfg.PrometheusURL == "" {
+		missing = append(missing, "PROMETHEUS_URL")
+	}
+	if cfg.JaegerURL == "" {
+		missing = append(missing, "JAEGER_URL")
+	}
+	if cfg.KafkaBrokers == "" {
+		missing = append(missing, "KAFKA_BROKERS")
+	}
+	if cfg.TargetBaseURL == "" {
+		missing = append(missing, "TARGET_BASE_URL")
+	}
+
+	if len(missing) > 0 {
+		return cfg, fmt.Errorf("missing required environment variables: %s (ensure .env is loaded)", strings.Join(missing, ", "))
+	}
+
+	return cfg, nil
+}
+
+// ============================================================================
+// TODO (User Practice): Phase 13.1 - Task 2: Subsystem Wiring & Main Entrypoint
+// ----------------------------------------------------------------------------
+// Objective:
+//   Wire together the persistence, observability, analysis, stress, and API
+//   subsystems into a unified control plane server with graceful shutdown.
+//
+// Key Steps:
+//   1. Load configuration via LoadConfig().
+//   2. Open PostgreSQL connection using storage.OpenDB(cfg.PostgresDSN).
+//   3. Initialize repository: storage.NewPostgresExperimentRepository(db).
+//   4. Instantiate subsystem engines:
+//      - graph.NewAnalyzer for Jaeger dependency graph reconstruction.
+//      - stress.NewEngine for HTTP rate-controlled traffic generation.
+//      - watcher.NewPrometheusClient + watcher.NewWatcherEngine for RED metric polling.
+//      - safety.NewController for sub-second fast-path context cancellation.
+//      - capacity.NewAnalyzer for knee detection and recovery calculation.
+//      - report.NewReportEngine for multi-format JSON/HTML report generation.
+//      - observability.NewChecker for health monitoring probes.
+//   5. Construct experiment.NewManager wiring all subsystems together.
+//   6. Build HTTP handler and router using api.NewHandler and api.NewRouter.
+//   7. Launch http.Server with graceful shutdown listening for SIGINT and SIGTERM.
+// ============================================================================
+
+// healthCheckerAdapter adapts observability.Checker to satisfy api.ObservabilityChecker.
+type healthCheckerAdapter struct {
+	checker *observability.Checker
+	cfg     config.EnvironmentConfig
+}
+
+// CheckHealth queries the downstream observability stack (Target service mesh,
+// Jaeger query API, and Prometheus) via the adapted checker and maps the results
+// to health status strings. In case of probe failures or errors, it retains
+// individual component availability statuses and returns a non-nil error.
+func (a *healthCheckerAdapter) CheckHealth(ctx context.Context) (map[string]string, error) {
+	status, err := a.checker.CheckObservabilityStack(ctx, a.cfg)
+	if err != nil {
+		targetStatus := "UNREACHABLE"
+		jaegerStatus := "UNREACHABLE"
+		promStatus := "UNREACHABLE"
+		if status != nil {
+			targetStatus = status.Target
+			jaegerStatus = status.Jaeger
+			promStatus = status.Prometheus
+		}
+		return map[string]string{
+			"status":     "DOWN",
+			"target":     targetStatus,
+			"jaeger":     jaegerStatus,
+			"prometheus": promStatus,
+			"error":      err.Error(),
+		}, err
+	}
+	return map[string]string{
+		"status":     status.Status,
+		"target":     status.Target,
+		"jaeger":     status.Jaeger,
+		"prometheus": status.Prometheus,
+	}, nil
+}
+
+// main serves as the primary entrypoint for the DAMASCUS control plane executable.
+// It delegates execution to run() and terminates with a non-zero exit code if an
+// unrecoverable error occurs during startup or runtime operations.
+func main() {
+	if err := run(); err != nil {
+		slog.Error("fatal error", "error", err)
+		os.Exit(1)
+	}
+}
+
+// run initializes and orchestrates the DAMASCUS control plane runtime lifecycle.
+// It loads environment configuration, establishes database connections with connection pooling,
+// constructs domain engines (graph analyzer, stress engine, watcher, safety controller,
+// capacity analyzer, report engine, and observability checker), initializes the REST API
+// server, and handles graceful shutdown upon receiving termination signals (SIGINT, SIGTERM).
+func run() error {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load configuration from environment: %w", err)
+	}
+
+	logger.Info("starting damascus control plane",
+		"port", cfg.Port,
+		"prometheus_url", cfg.PrometheusURL,
+		"jaeger_url", cfg.JaegerURL,
+	)
+
+	// >>> YOUR CODE FOR TASK 2 STARTS HERE <<<
+
+	// 1. Initialize PostgreSQL database connection pool
+	db, err := storage.OpenDB(cfg.PostgresDSN)
+	if err != nil {
+		return fmt.Errorf("failed to connect to postgres database: %w", err)
+	}
+	defer db.Close()
+	logger.Info("connected to postgres database with connection pooling",
+		"max_open_conns", storage.DefaultMaxOpenConns,
+		"max_idle_conns", storage.DefaultMaxIdleConns,
+	)
+
+	repo := storage.NewPostgresExperimentRepository(db)
+
+	// 2. Initialize HTTP client with connection reuse
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+
+	// 3. Instantiate domain engines
+	graphAnalyzer := graph.NewAnalyzer(cfg.JaegerURL, httpClient)
+	stressEngine := stress.NewEngine(httpClient)
+
+	var watcherEngine experiment.Watcher
+	promClient, promErr := watcher.NewPrometheusClient(cfg.PrometheusURL)
+	if promErr != nil {
+		logger.Warn("failed to initialize prometheus client; metrics polling disabled", "error", promErr)
+	} else {
+		watcherEngine = watcher.NewWatcherEngine(promClient, nil)
+	}
+
+	safetyController := safety.NewController(logger)
+	capacityAnalyzer := capacity.NewAnalyzer()
+	reportEngine := report.NewReportEngine()
+	checker := observability.NewChecker(5 * time.Second)
+
+	// 4. Construct ExperimentManager coordinating the 8-state experiment lifecycle
+	manager := experiment.NewManager(
+		graphAnalyzer,
+		stressEngine,
+		watcherEngine,
+		safetyController,
+		capacityAnalyzer,
+		reportEngine,
+		repo,
+	)
+	defer manager.Shutdown()
+
+	// 5. Build REST API handler and routes
+	healthChecker := &healthCheckerAdapter{
+		checker: checker,
+		cfg: config.EnvironmentConfig{
+			TargetBaseURL:      cfg.TargetBaseURL,
+			JaegerTraceBaseURL: cfg.JaegerURL,
+			PrometheusBaseURL:  cfg.PrometheusURL,
+		},
+	}
+
+	handler := api.NewHandler(
+		manager,
+		repo,
+		graphAnalyzer,
+		api.WithReportEngine(reportEngine),
+		api.WithObservabilityChecker(healthChecker),
+	)
+	router := api.NewRouter(handler)
+
+	// 6. Launch HTTP server with graceful shutdown
+	server := &http.Server{
+		Addr:         ":" + cfg.Port,
+		Handler:      router,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	serverErrCh := make(chan error, 1)
+	go func() {
+		logger.Info("http server listening", "addr", server.Addr)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErrCh <- err
+		}
+	}()
+
+	// 7. Wait for shutdown signal (SIGINT, SIGTERM)
+	shutdownSignal := make(chan os.Signal, 1)
+	signal.Notify(shutdownSignal, os.Interrupt, syscall.SIGTERM)
+
+	select {
+	case err := <-serverErrCh:
+		return fmt.Errorf("server startup failed: %w", err)
+	case sig := <-shutdownSignal:
+		logger.Info("shutdown signal received; commencing graceful shutdown", "signal", sig.String())
+	}
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("server graceful shutdown failed: %w", err)
+	}
+
+	logger.Info("server exited cleanly")
+	return nil
+
+}

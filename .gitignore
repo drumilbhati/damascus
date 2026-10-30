@@ -1,5 +1,6 @@
 # Root Binaries
 /gateway
+/damascus
 *.exe
 *.dll
 *.so
@@ -12,3 +13,8 @@
 .vscode/
 *.swp
 *.swo
+
+# Environment Variables
+.env
+.env.*
+!.env.example

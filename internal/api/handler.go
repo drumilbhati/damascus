@@ -621,7 +621,6 @@ func (h *Handler) GetExperimentReport(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, report)
 }
 
-<<<<<<< HEAD
 // prefersHTML evaluates request format query parameter and HTTP Accept header quality values (RFC 7231).
 // Explicit format takes precedence (?format=html -> true, ?format=json -> false).
 // Accept: text/html is only selected when quality q > 0 and higher than application/json.
@@ -677,7 +676,8 @@ func prefersHTML(r *http.Request) bool {
 
 	// Select HTML if acceptable and either JSON is not requested or HTML has strictly higher quality
 	return qJSON < 0 || qHTML > qJSON
-=======
+}
+
 // GetServices handles GET /api/services.
 // It fetches the list of currently known services from Jaeger via the graph analyzer
 // by building a lightweight dependency graph and extracting unique node names.
@@ -700,7 +700,6 @@ func (h *Handler) GetServices(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.writeJSON(w, http.StatusOK, ServicesResponse{Services: services})
->>>>>>> ed39455 (feat: enhance ExperimentsPage with service discovery and improved UI)
 }
 
 // GetHealth handles GET /api/health

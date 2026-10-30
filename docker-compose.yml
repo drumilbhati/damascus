@@ -1,0 +1,388 @@
+# ============================================================================
+# TODO (User Practice): Phase 13.1 - Task 4: Unified Local Docker Compose Environment
+# ----------------------------------------------------------------------------
+# Objective:
+#   Bundle DAMASCUS control plane, web frontend, PostgreSQL, Kafka, Prometheus,
+#   Jaeger, OTEL Collector, and the OpenTelemetry Astronomy Shop target mesh.
+#
+# Core Services to Orchestrate:
+#   1. damascus-control-plane: Go backend container compiled via root Dockerfile (:8080)
+#   2. damascus-ui: React + Tailwind Vite web dashboard compiled via web/Dockerfile (:3000)
+#   3. postgres: PostgreSQL 16 relational store with schema auto-init (:5432)
+#   4. zookeeper & kafka: Apache Kafka event streaming backbone (:9092)
+#   5. jaeger: Distributed tracing backend (:16686)
+#   6. prometheus: Time-series RED metric scraping engine (:9090)
+#   7. otel-collector: OTLP telemetry receiver and exporter (:4317, :4318)
+#   8. target-mesh: OpenTelemetry Astronomy Shop microservices under resilience test
+# ============================================================================
+
+# >>> YOUR CODE FOR TASK 4 STARTS HERE <<<
+
+networks:
+  damascus-net:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  prometheus-data:
+
+services:
+  # -------------------------------------------------------------
+  # 1. DAMASCUS Control Plane & Web UI
+  # -------------------------------------------------------------
+  damascus-control-plane:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: damascus-control-plane
+    restart: unless-stopped
+    ports:
+      - "${PORT}:${PORT}"
+    environment:
+      - PORT=${PORT}
+      - POSTGRES_DSN=${POSTGRES_DSN}
+      - PROMETHEUS_URL=${PROMETHEUS_URL}
+      - JAEGER_URL=${JAEGER_URL}
+      - KAFKA_BROKERS=${KAFKA_BROKERS}
+      - TARGET_BASE_URL=${TARGET_BASE_URL}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 ${PORT} || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      prometheus:
+        condition: service_started
+      jaeger:
+        condition: service_started
+    networks:
+      - damascus-net
+
+  damascus-ui:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: damascus-ui
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT}:80"
+    environment:
+      - PORT=80
+      - BACKEND_URL=http://damascus-control-plane:${PORT}/api/
+    depends_on:
+      damascus-control-plane:
+        condition: service_healthy
+    networks:
+      - damascus-net
+
+  # -------------------------------------------------------------
+  # 2. Persistence & Event Backbone
+  # -------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: damascus-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - damascus-net
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: damascus-zookeeper
+    restart: unless-stopped
+    environment:
+      - ZOOKEEPER_CLIENT_PORT=2181
+      - ZOOKEEPER_TICK_TIME=2000
+    networks:
+      - damascus-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: damascus-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT_INTERNAL
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+    depends_on:
+      - zookeeper
+    networks:
+      - damascus-net
+
+  # -------------------------------------------------------------
+  # 3. Observability Infrastructure
+  # -------------------------------------------------------------
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: damascus-jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686"
+      - "4317"
+    networks:
+      - damascus-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: damascus-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./internal/deployments/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - damascus-net
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    container_name: damascus-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./internal/deployments/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    depends_on:
+      - jaeger
+      - prometheus
+    networks:
+      - damascus-net
+
+  # -------------------------------------------------------------
+  # 4. Target Mesh Microservices (OpenTelemetry Astronomy Shop)
+  # -------------------------------------------------------------
+  flagd:
+    image: ghcr.io/open-feature/flagd:latest
+    container_name: damascus-flagd
+    restart: unless-stopped
+    command: ["start", "--uri", "file:/etc/flagd/demo.flagd.json"]
+    volumes:
+      - ./internal/deployments/flagd:/etc/flagd:ro
+    ports:
+      - "8013:8013"
+    environment:
+      - PORT=8013
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=flagd
+    depends_on:
+      - otel-collector
+    networks:
+      - damascus-net
+
+  frontend:
+    image: ghcr.io/open-telemetry/demo:1.11.0-frontend
+    container_name: damascus-frontend
+    restart: unless-stopped
+    ports:
+      - "8085:8080"
+    environment:
+      - PORT=8080
+      - FRONTEND_PORT=8080
+      - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
+      - CURRENCY_SERVICE_ADDR=currencyservice:7001
+      - CART_SERVICE_ADDR=cartservice:8080
+      - RECOMMENDATION_SERVICE_ADDR=recommendationservice:8080
+      - SHIPPING_SERVICE_ADDR=shippingservice:50050
+      - CHECKOUT_SERVICE_ADDR=checkoutservice:5050
+      - AD_SERVICE_ADDR=adservice:9555
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=frontend
+    depends_on:
+      - otel-collector
+      - productcatalogservice
+      - currencyservice
+      - cartservice
+    networks:
+      - damascus-net
+
+  cartservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-cartservice
+    container_name: damascus-cartservice
+    restart: unless-stopped
+    environment:
+      - PORT=8080
+      - CART_SERVICE_PORT=8080
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=cartservice
+    depends_on:
+      - otel-collector
+    networks:
+      - damascus-net
+
+  productcatalogservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-productcatalogservice
+    container_name: damascus-productcatalogservice
+    restart: unless-stopped
+    environment:
+      - PORT=3550
+      - PRODUCT_CATALOG_SERVICE_PORT=3550
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=productcatalogservice
+    depends_on:
+      - otel-collector
+      - flagd
+    networks:
+      - damascus-net
+
+  currencyservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-currencyservice
+    container_name: damascus-currencyservice
+    restart: unless-stopped
+    environment:
+      - PORT=7001
+      - CURRENCY_SERVICE_PORT=7001
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=currencyservice
+    depends_on:
+      - otel-collector
+    networks:
+      - damascus-net
+
+  paymentservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-paymentservice
+    container_name: damascus-paymentservice
+    restart: unless-stopped
+    environment:
+      - PORT=50051
+      - PAYMENT_SERVICE_PORT=50051
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=paymentservice
+    depends_on:
+      - otel-collector
+      - flagd
+    networks:
+      - damascus-net
+
+  shippingservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-shippingservice
+    container_name: damascus-shippingservice
+    restart: unless-stopped
+    environment:
+      - PORT=50050
+      - SHIPPING_SERVICE_PORT=50050
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=shippingservice
+    depends_on:
+      - otel-collector
+    networks:
+      - damascus-net
+
+  emailservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-emailservice
+    container_name: damascus-emailservice
+    restart: unless-stopped
+    environment:
+      - PORT=6060
+      - EMAIL_SERVICE_PORT=6060
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=emailservice
+    depends_on:
+      - otel-collector
+    networks:
+      - damascus-net
+
+  checkoutservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-checkoutservice
+    container_name: damascus-checkoutservice
+    restart: unless-stopped
+    environment:
+      - PORT=5050
+      - CHECKOUT_SERVICE_PORT=5050
+      - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
+      - SHIPPING_SERVICE_ADDR=shippingservice:50050
+      - PAYMENT_SERVICE_ADDR=paymentservice:50051
+      - EMAIL_SERVICE_ADDR=http://emailservice:6060
+      - CURRENCY_SERVICE_ADDR=currencyservice:7001
+      - CART_SERVICE_ADDR=cartservice:8080
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=checkoutservice
+    depends_on:
+      - otel-collector
+      - flagd
+    networks:
+      - damascus-net
+
+  recommendationservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-recommendationservice
+    container_name: damascus-recommendationservice
+    restart: unless-stopped
+    environment:
+      - PORT=8080
+      - RECOMMENDATION_SERVICE_PORT=8080
+      - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=recommendationservice
+    depends_on:
+      - otel-collector
+      - flagd
+    networks:
+      - damascus-net
+
+  adservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-adservice
+    container_name: damascus-adservice
+    restart: unless-stopped
+    environment:
+      - PORT=9555
+      - AD_SERVICE_PORT=9555
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=adservice
+    depends_on:
+      - otel-collector
+      - flagd
+    networks:
+      - damascus-net
+
+  loadgenerator:
+    image: ghcr.io/open-telemetry/demo:1.11.0-loadgenerator
+    container_name: damascus-loadgenerator
+    restart: unless-stopped
+    environment:
+      - LOCUST_HOST=http://frontend:8080
+      - LOCUST_USERS=10
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=loadgenerator
+    depends_on:
+      - frontend
+    networks:
+      - damascus-net
+
+# >>> YOUR CODE FOR TASK 4 ENDS HERE <<<

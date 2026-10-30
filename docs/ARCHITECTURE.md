@@ -166,3 +166,85 @@ flowchart LR
 3. **DAMASCUS $\leftrightarrow$ Prometheus**: HTTP PromQL API (`/api/v1/query`, `/api/v1/query_range`).
 4. **DAMASCUS $\leftrightarrow$ PostgreSQL**: Relational persistence using standard `database/sql` (`pgx` driver).
 5. **DAMASCUS $\leftrightarrow$ Kafka**: Binary TCP protocol using `franz-go` or `sarama` on topic `experiment-events`.
+
+---
+
+## 6. Deployment & Container Architecture
+
+### 6.1 Multi-Stage Production Dockerfile
+
+The DAMASCUS control plane is packaged as a lightweight, secure container image via multi-stage compilation:
+
+- **Stage 1 (`builder`)**: Uses `golang:alpine` to fetch dependencies and compile a statically linked binary (`CGO_ENABLED=0`) with symbol stripping (`-ldflags="-s -w"`).
+- **Stage 2 (`runtime`)**: Uses a minimal `alpine:latest` base with runtime `ca-certificates` and `tzdata`. Runs as a dedicated unprivileged user (`damascus`, UID `10001`) with zero build tools or shell dependencies.
+
+### 6.2 Configuration & Environment Variables
+
+The control plane (`cmd/damascus/main.go`) dynamically configures itself via environment variables. All six variables are required (no silent runtime fallback defaults):
+
+| Environment Variable | Example Value | Description |
+| :--- | :--- | :--- |
+| `PORT` | `8080` | HTTP listen port for the control plane REST API |
+| `POSTGRES_DSN` | `postgres://damascus:damascus@localhost:5432/damascus?sslmode=disable` | PostgreSQL connection URI |
+| `PROMETHEUS_URL` | `http://localhost:9090` | Base URL for Prometheus query API |
+| `JAEGER_URL` | `http://localhost:16686` | Base URL for Jaeger query API |
+| `KAFKA_BROKERS` | `kafka:29092` | Comma-separated Kafka broker addresses |
+| `TARGET_BASE_URL` | `http://frontend:8080` | Target microservice mesh entrypoint |
+
+### 6.3 Unified Docker Compose Orchestration (`docker-compose.yml`)
+
+The root `docker-compose.yml` bundles the complete ecosystem across the shared `damascus-net` bridge network:
+
+```mermaid
+flowchart TD
+    subgraph UI["Web Presentation"]
+        D_UI["damascus-ui (:3000)"]
+    end
+
+    subgraph ControlPlane["Control Plane"]
+        D_CP["damascus-control-plane (:8080)"]
+    end
+
+    subgraph Backends["Storage & Streaming"]
+        PG[("PostgreSQL 16 (:5432)")]
+        KAFKA{{"Kafka + Zookeeper (:9092, :29092)"}}
+    end
+
+    subgraph Observability["Telemetry Infrastructure"]
+        PROM["Prometheus (:9090)"]
+        JAEGER["Jaeger (:16686)"]
+        OTEL["OTEL Collector (:4317/:4318)"]
+    end
+
+    subgraph TargetMesh["Astronomy Shop Target Mesh"]
+        FE["frontend (:8085)"]
+        SERVICES["11 Backend Microservices & flagd"]
+    end
+
+    D_UI -->|Reverse Proxy /api| D_CP
+    D_CP -->|SQL Pool: 25/5/5m| PG
+    D_CP -->|Domain Events| KAFKA
+    D_CP -->|PromQL Queries| PROM
+    D_CP -->|Trace Spans| JAEGER
+    D_CP -->|Stress Traffic| FE
+    FE --> SERVICES
+    SERVICES -->|OTLP Spans & Metrics| OTEL
+    OTEL -->|Export Spans| JAEGER
+    OTEL -->|Export Metrics| PROM
+```
+
+Run locally:
+```bash
+cp .env.example .env
+docker compose up -d
+```
+- **React Dashboard UI**: `http://localhost:3000`
+- **Control Plane REST API**: `http://localhost:8080/api/health`
+- **Jaeger Tracing Console**: `http://localhost:16686`
+- **Prometheus Console**: `http://localhost:9090`
+- **Astronomy Shop Frontend**: `http://localhost:8085`
+- **Control Plane REST API**: `http://localhost:8080/api/health`
+- **Jaeger Tracing Console**: `http://localhost:16686`
+- **Prometheus Console**: `http://localhost:9090`
+- **Astronomy Shop Frontend**: `http://localhost:8085`
+
