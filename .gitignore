@@ -1,5 +1,6 @@
 # Root Binaries
 /gateway
+/damascus
 *.exe
 *.dll
 *.so

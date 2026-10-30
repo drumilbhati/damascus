@@ -55,7 +55,10 @@ type Config struct {
 }
 
 // LoadConfig reads configuration settings directly from system environment variables.
-// If any required environment variable is missing or empty, an error is returned.
+// It verifies that all required variables (PORT, POSTGRES_DSN, PROMETHEUS_URL,
+// JAEGER_URL, KAFKA_BROKERS, and TARGET_BASE_URL) are set to non-empty values.
+// If any required variable is missing or blank, LoadConfig returns an error
+// detailing the missing parameters.
 func LoadConfig() (Config, error) {
 	cfg := Config{
 		Port:          strings.TrimSpace(os.Getenv("PORT")),
@@ -123,6 +126,10 @@ type healthCheckerAdapter struct {
 	cfg     config.EnvironmentConfig
 }
 
+// CheckHealth queries the downstream observability stack (Target service mesh,
+// Jaeger query API, and Prometheus) via the adapted checker and maps the results
+// to health status strings. In case of probe failures or errors, it retains
+// individual component availability statuses and returns a non-nil error.
 func (a *healthCheckerAdapter) CheckHealth(ctx context.Context) (map[string]string, error) {
 	status, err := a.checker.CheckObservabilityStack(ctx, a.cfg)
 	if err != nil {
@@ -150,6 +157,9 @@ func (a *healthCheckerAdapter) CheckHealth(ctx context.Context) (map[string]stri
 	}, nil
 }
 
+// main serves as the primary entrypoint for the DAMASCUS control plane executable.
+// It delegates execution to run() and terminates with a non-zero exit code if an
+// unrecoverable error occurs during startup or runtime operations.
 func main() {
 	if err := run(); err != nil {
 		slog.Error("fatal error", "error", err)
@@ -157,6 +167,11 @@ func main() {
 	}
 }
 
+// run initializes and orchestrates the DAMASCUS control plane runtime lifecycle.
+// It loads environment configuration, establishes database connections with connection pooling,
+// constructs domain engines (graph analyzer, stress engine, watcher, safety controller,
+// capacity analyzer, report engine, and observability checker), initializes the REST API
+// server, and handles graceful shutdown upon receiving termination signals (SIGINT, SIGTERM).
 func run() error {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)

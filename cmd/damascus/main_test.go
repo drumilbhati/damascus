@@ -12,6 +12,8 @@ import (
 	"damascus/internal/observability"
 )
 
+// TestLoadConfig_MissingVariables verifies that LoadConfig rejects configurations
+// when any or all required environment variables are missing or empty.
 func TestLoadConfig_MissingVariables(t *testing.T) {
 	// Clear all environment variables to ensure it detects missing configuration
 	vars := []string{"PORT", "POSTGRES_DSN", "PROMETHEUS_URL", "JAEGER_URL", "KAFKA_BROKERS", "TARGET_BASE_URL"}
@@ -32,6 +34,8 @@ func TestLoadConfig_MissingVariables(t *testing.T) {
 	}
 }
 
+// TestLoadConfig_SuccessFromEnvironment verifies that LoadConfig properly reads
+// and populates all Config struct fields when valid environment variables are present.
 func TestLoadConfig_SuccessFromEnvironment(t *testing.T) {
 	t.Setenv("PORT", "9095")
 	t.Setenv("POSTGRES_DSN", "postgres://custom:pass@pg.local:5432/db")
@@ -65,6 +69,8 @@ func TestLoadConfig_SuccessFromEnvironment(t *testing.T) {
 	}
 }
 
+// TestHealthCheckerAdapter verifies the behavior of healthCheckerAdapter across
+// healthy stacks, unreachable endpoints, and connection timeout scenarios.
 func TestHealthCheckerAdapter(t *testing.T) {
 	ctx := context.Background()
 
