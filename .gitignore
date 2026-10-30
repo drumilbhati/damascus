@@ -12,3 +12,8 @@
 .vscode/
 *.swp
 *.swo
+
+# Environment Variables
+.env
+.env.*
+.env.example
