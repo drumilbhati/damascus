@@ -74,6 +74,7 @@ services:
     environment:
       - PORT=80
       - BACKEND_URL=http://damascus-control-plane:${PORT}/api/
+      - NGINX_ENVSUBST_FILTER=BACKEND_URL|PORT
     depends_on:
       damascus-control-plane:
         condition: service_healthy
@@ -223,6 +224,15 @@ services:
     networks:
       - damascus-net
 
+  valkey-cart:
+    image: valkey/valkey:7.2-alpine
+    container_name: damascus-valkey-cart
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - damascus-net
+
   cartservice:
     image: ghcr.io/open-telemetry/demo:1.11.0-cartservice
     container_name: damascus-cartservice
@@ -230,10 +240,12 @@ services:
     environment:
       - PORT=8080
       - CART_SERVICE_PORT=8080
+      - VALKEY_ADDR=valkey-cart:6379
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=cartservice
     depends_on:
       - otel-collector
+      - valkey-cart
     networks:
       - damascus-net
 
@@ -261,6 +273,7 @@ services:
     environment:
       - PORT=7001
       - CURRENCY_SERVICE_PORT=7001
+      - VERSION=1.11.0
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
       - OTEL_SERVICE_NAME=currencyservice
     depends_on:
