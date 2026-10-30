@@ -18,3 +18,8 @@
 .env
 .env.*
 !.env.example
+
+# Local deployment configuration
+/docker-compose.web.yaml
+/web/Dockerfile
+/web/nginx.conf.template
