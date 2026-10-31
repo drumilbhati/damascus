@@ -176,7 +176,12 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 		return errors.New("watcher is nil")
 	}
 
-	expCtx, cancelExp := context.WithCancel(ctx)
+	// Use the manager's shutdown context instead of the HTTP request context so
+	// that the experiment lifecycle is not cancelled when the HTTP response is sent.
+	// The request context (ctx) is short-lived and gets cancelled by net/http as
+	// soon as the handler returns, which would immediately kill the background
+	// goroutines (watcher, stress engine, finishExperiment).
+	expCtx, cancelExp := context.WithCancel(m.shutdownCtx)
 	stressCtx, cancelStress := context.WithCancel(expCtx)
 
 	m.mu.Lock()

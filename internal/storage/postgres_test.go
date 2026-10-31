@@ -399,10 +399,10 @@ func TestPostgresExperimentRepository_UpdateState(t *testing.T) {
 		mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE experiments
 		SET 
-			status = $1,
+			status = $1::varchar,
 			stop_reason = CASE WHEN $2 <> '' THEN $2 ELSE stop_reason END,
-			started_at = CASE WHEN $1 = 'RUNNING' AND started_at IS NULL THEN CURRENT_TIMESTAMP ELSE started_at END,
-			ended_at = CASE WHEN ($1 = 'COMPLETED' OR $1 = 'ABORTED') AND ended_at IS NULL THEN CURRENT_TIMESTAMP ELSE ended_at END
+			started_at = CASE WHEN $1::varchar = 'RUNNING' AND started_at IS NULL THEN CURRENT_TIMESTAMP ELSE started_at END,
+			ended_at = CASE WHEN ($1::varchar = 'COMPLETED' OR $1::varchar = 'ABORTED') AND ended_at IS NULL THEN CURRENT_TIMESTAMP ELSE ended_at END
 		WHERE id = $3`)).
 			WithArgs(string(experiment.StateStopping), "P95 latency breached", "exp-789").
 			WillReturnResult(sqlmock.NewResult(0, 1))
