@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useState, useMemo } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useExperiments, useServices } from '../api/hooks';
 import { createExperiment } from '../api/endpoints';
 import type { ExperimentType, ExperimentConfig } from '../types';
@@ -24,16 +24,28 @@ const inputCls = "w-full rounded px-3 py-1.5 text-xs font-mono outline-none focu
 const inputStyle = { backgroundColor: '#0d1117', border: '1px solid #30363d', color: '#e6edf3' };
 
 export const ExperimentsPage: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const targetParam = searchParams.get('target');
+
   const { data: experiments, mutate, isLoading } = useExperiments();
   const [filterState, setFilterState] = useState<string>('ALL');
-  const [showModal, setShowModal] = useState(false);
+  const [showModal, setShowModal] = useState(Boolean(targetParam));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
   // New flow: URL first, then service selected from discovered list
   const [targetURL, setTargetURL] = useState('');
-  const [targetService, setTargetService] = useState('');
-  const [servicesLoaded, setServicesLoaded] = useState(false);
+  const [targetService, setTargetService] = useState(targetParam || '');
+
+  // Adjust state during render when target query parameter in URL changes
+  const [prevTargetParam, setPrevTargetParam] = useState(targetParam);
+  if (targetParam !== prevTargetParam) {
+    setPrevTargetParam(targetParam);
+    if (targetParam) {
+      setTargetService(targetParam);
+      setShowModal(true);
+    }
+  }
 
   const [expType, setExpType] = useState<ExperimentType>('ramp');
   const [config, setConfig] = useState<ExperimentConfig>({
@@ -50,32 +62,29 @@ export const ExperimentsPage: React.FC = () => {
   // Only fetch services when the modal is open
   const { data: servicesData, isLoading: loadingServices, error: servicesError, mutate: refetchServices } = useServices(showModal);
 
-  const availableServices = servicesData?.services ?? [];
-
-  // When services load for the first time, auto-select the first one
-  React.useEffect(() => {
-    if (availableServices.length > 0 && !servicesLoaded) {
-      setTargetService(availableServices[0]);
-      setServicesLoaded(true);
-    }
-  }, [availableServices, servicesLoaded]);
+  const availableServices = useMemo(() => servicesData?.services ?? [], [servicesData?.services]);
 
   const handleOpenModal = () => {
     setTargetURL('');
     setTargetService('');
-    setServicesLoaded(false);
     setFormError(null);
     setShowModal(true);
   };
 
   const handleCloseModal = () => {
     setShowModal(false);
-    setServicesLoaded(false);
+    if (searchParams.has('target')) {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('target');
+      setSearchParams(nextParams, { replace: true });
+    }
   };
+
+  const effectiveTargetService = targetService || (availableServices.length > 0 ? availableServices[0] : '');
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!targetService) {
+    if (!effectiveTargetService) {
       setFormError('Please select a target service');
       return;
     }
@@ -86,7 +95,7 @@ export const ExperimentsPage: React.FC = () => {
     setFormError(null);
     setIsSubmitting(true);
     try {
-      await createExperiment({ target_service: targetService, target_url: targetURL, type: expType, config });
+      await createExperiment({ target_service: effectiveTargetService, target_url: targetURL, type: expType, config });
       handleCloseModal();
       mutate();
     } catch (err: any) {
@@ -295,20 +304,23 @@ export const ExperimentsPage: React.FC = () => {
                   <select
                     className={inputCls}
                     style={inputStyle}
-                    value={targetService}
+                    value={effectiveTargetService}
                     onChange={(e) => setTargetService(e.target.value)}
                     required
                   >
                     <option value="">— select a service —</option>
-                    {availableServices.sort().map((svc) => (
+                    {effectiveTargetService && !availableServices.includes(effectiveTargetService) && (
+                      <option value={effectiveTargetService}>{effectiveTargetService} (targeted)</option>
+                    )}
+                    {availableServices.slice().sort().map((svc) => (
                       <option key={svc} value={svc}>{svc}</option>
                     ))}
                   </select>
                 )}
 
-                {targetService && !servicesError && availableServices.length > 0 && (
+                {effectiveTargetService && !servicesError && availableServices.length > 0 && (
                   <p className="mt-1 font-mono text-[10px]" style={{ color: '#6e7681' }}>
-                    selected: <span style={{ color: '#f0883e' }}>{targetService}</span>
+                    selected: <span style={{ color: '#f0883e' }}>{effectiveTargetService}</span>
                     &nbsp;·&nbsp;{availableServices.length} service{availableServices.length !== 1 ? 's' : ''} in mesh
                   </p>
                 )}

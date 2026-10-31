@@ -29,7 +29,9 @@ export const DependenciesPage: React.FC = () => {
           {/* View Mode Tabs */}
           <div className="flex items-center rounded overflow-hidden" style={{ border: '1px solid #30363d' }}>
             <button
+              type="button"
               onClick={() => setActiveTab('all')}
+              aria-pressed={activeTab === 'all'}
               className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium"
               style={{
                 backgroundColor: activeTab === 'all' ? '#30363d' : '#21262d',
@@ -41,7 +43,9 @@ export const DependenciesPage: React.FC = () => {
               <span>Full View</span>
             </button>
             <button
+              type="button"
               onClick={() => setActiveTab('graph')}
+              aria-pressed={activeTab === 'graph'}
               className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium"
               style={{
                 backgroundColor: activeTab === 'graph' ? '#30363d' : '#21262d',
@@ -53,7 +57,9 @@ export const DependenciesPage: React.FC = () => {
               <span>Graph</span>
             </button>
             <button
+              type="button"
               onClick={() => setActiveTab('table')}
+              aria-pressed={activeTab === 'table'}
               className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium"
               style={{
                 backgroundColor: activeTab === 'table' ? '#30363d' : '#21262d',
@@ -68,7 +74,10 @@ export const DependenciesPage: React.FC = () => {
 
           <select
             value={lookback}
-            onChange={(e) => setLookback(parseInt(e.target.value))}
+            onChange={(e) => {
+              setLookback(parseInt(e.target.value));
+              setSelectedService(null);
+            }}
             className="rounded px-2.5 py-1.5 text-xs font-mono outline-none"
             style={{ backgroundColor: '#21262d', border: '1px solid #30363d', color: '#e6edf3' }}
           >
@@ -151,8 +160,17 @@ export const DependenciesPage: React.FC = () => {
                       return (
                         <div
                           key={s.service_name}
+                          role="button"
+                          tabIndex={0}
+                          aria-pressed={isSelected}
                           onClick={() => setSelectedService(isSelected ? null : s.service_name)}
-                          className="px-4 py-3 cursor-pointer transition-colors hover:bg-[#1c2128]"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setSelectedService(isSelected ? null : s.service_name);
+                            }
+                          }}
+                          className="px-4 py-3 cursor-pointer transition-colors hover:bg-[#1c2128] focus:outline-none focus:bg-[#1c2128]"
                           style={{
                             borderBottom: idx < scores.length - 1 ? '1px solid #21262d' : 'none',
                             backgroundColor: isSelected ? 'rgba(88, 166, 255, 0.1)' : undefined,
@@ -236,12 +254,21 @@ export const DependenciesPage: React.FC = () => {
                             return (
                               <tr
                                 key={`${e.from}-${e.to}-${idx}`}
+                                role="button"
+                                tabIndex={0}
+                                aria-label={`Select link between ${e.from} and ${e.to}`}
                                 style={{
                                   borderBottom: idx < edges.length - 1 ? '1px solid #21262d' : 'none',
                                   backgroundColor: isEdgeHighlighted ? 'rgba(88, 166, 255, 0.08)' : undefined,
                                 }}
-                                className="hover:bg-[#1c2128] transition-colors cursor-pointer"
+                                className="hover:bg-[#1c2128] transition-colors cursor-pointer focus:outline-none focus:bg-[#1c2128]"
                                 onClick={() => setSelectedService(e.from === selectedService ? e.to : e.from)}
+                                onKeyDown={(ev) => {
+                                  if (ev.key === 'Enter' || ev.key === ' ') {
+                                    ev.preventDefault();
+                                    setSelectedService(e.from === selectedService ? e.to : e.from);
+                                  }
+                                }}
                               >
                                 <td className="px-4 py-2.5 font-mono font-semibold" style={{ color: '#e6edf3' }}>
                                   {e.from}

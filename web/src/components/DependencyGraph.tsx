@@ -105,10 +105,18 @@ const getCriticalityTier = (score: number): CriticalityTier => {
   };
 };
 
-const isStorageOrDatabase = (name: string): boolean => {
+const isStorageOrDatabase = (name: string, metadata?: Record<string, string>): boolean => {
+  if (
+    metadata?.type &&
+    ['database', 'storage', 'cache', 'db'].includes(metadata.type.toLowerCase())
+  ) {
+    return true;
+  }
   const lower = name.toLowerCase();
+  // Match 'db' as a standalone token or bounded by delimiters (not an arbitrary substring like in 'feedback')
+  const dbTokenRegex = /(^|[._:-])db([._:-]|$)/i;
   return (
-    lower.includes('db') ||
+    dbTokenRegex.test(lower) ||
     lower.includes('database') ||
     lower.includes('redis') ||
     lower.includes('postgres') ||
@@ -135,10 +143,11 @@ const ServiceNodeComponent: React.FC<NodeProps<ServiceNodeType>> = ({
     outDegree,
     direction = 'LR',
     isDimmed,
+    metadata,
   } = data;
 
   const tier = getCriticalityTier(score);
-  const isDb = isStorageOrDatabase(name);
+  const isDb = isStorageOrDatabase(name, metadata);
   const scorePercent = (score * 100).toFixed(0);
 
   const isHorizontal = direction === 'LR';
@@ -323,13 +332,15 @@ export interface DependencyGraphProps {
   showInspector?: boolean;
 }
 
+const DEFAULT_SCORES: ServiceScore[] = [];
+
 const nodeTypes = {
   service: ServiceNodeComponent,
 };
 
 const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
   graph,
-  scores = [],
+  scores = DEFAULT_SCORES,
   selectedService: controlledSelectedService,
   onSelectService,
   className = '',
@@ -376,14 +387,17 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
       if (e.to) nodeNames.add(e.to);
     });
 
-    const inDegrees = new Map<string, number>();
-    const outDegrees = new Map<string, number>();
+    const inCallers = new Map<string, Set<string>>();
+    const outCallees = new Map<string, Set<string>>();
     const callsIn = new Map<string, number>();
     const callsOut = new Map<string, number>();
 
     rawEdges.forEach((e) => {
-      outDegrees.set(e.from, (outDegrees.get(e.from) || 0) + 1);
-      inDegrees.set(e.to, (inDegrees.get(e.to) || 0) + 1);
+      if (!outCallees.has(e.from)) outCallees.set(e.from, new Set());
+      if (!inCallers.has(e.to)) inCallers.set(e.to, new Set());
+      outCallees.get(e.from)!.add(e.to);
+      inCallers.get(e.to)!.add(e.from);
+
       callsOut.set(e.from, (callsOut.get(e.from) || 0) + e.call_count);
       callsIn.set(e.to, (callsIn.get(e.to) || 0) + e.call_count);
     });
@@ -400,15 +414,15 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
 
       return {
         id: name,
-        type: 'service',
+        type: 'service' as const,
         position: { x: 0, y: 0 },
         data: {
           name,
           score: scoreVal,
           reasons,
           isSPOF,
-          inDegree: inDegrees.get(name) || 0,
-          outDegree: outDegrees.get(name) || 0,
+          inDegree: inCallers.get(name)?.size || 0,
+          outDegree: outCallees.get(name)?.size || 0,
           callCountIn: callsIn.get(name) || 0,
           callCountOut: callsOut.get(name) || 0,
           metadata: graph?.nodes?.[name]?.metadata,
@@ -420,13 +434,34 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
     return { rawNodes, rawEdges };
   }, [graph, scoresMap, direction]);
 
-  // Compute graph elements with layout and highlighting
-  const { nodes: layoutedNodes, edges: layoutedEdges } = useMemo(() => {
+  const [layoutResetToken, setLayoutResetToken] = useState(0);
+
+  // Compute Dagre layout positions only when graph topology, layout direction, or reset token changes
+  const dagrePositions = useMemo(() => {
+    if (rawNodes.length === 0) return new Map<string, { x: number; y: number }>();
+    // layoutResetToken triggers re-layout calculation when incremented
+    if (layoutResetToken < 0) return new Map();
+    const dummyEdges: Edge[] = rawEdges.map((e, idx) => ({
+      id: `dagre-e-${idx}`,
+      source: e.from,
+      target: e.to,
+    }));
+    const { nodes: layouted } = applyDagreLayout(rawNodes, dummyEdges, direction);
+    const map = new Map<string, { x: number; y: number }>();
+    layouted.forEach((n) => map.set(n.id, n.position));
+    return map;
+  }, [rawNodes, rawEdges, direction, layoutResetToken]);
+
+  const [nodes, setNodes, onNodesChange] = useNodesState<ServiceNodeType>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+
+  // Update nodes while preserving user-dragged positions across search, filter, and selection changes
+  useEffect(() => {
     if (rawNodes.length === 0) {
-      return { nodes: [], edges: [] };
+      setNodes([]);
+      return;
     }
 
-    // Determine connected node ids if a service is selected
     const connectedNodeIds = new Set<string>();
     if (activeSelected) {
       connectedNodeIds.add(activeSelected);
@@ -436,9 +471,77 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
       });
     }
 
-    // Filter nodes by criticality/spof or query if necessary
-    const nodesWithSelection = rawNodes.map((n) => {
-      const isSelected = n.id === activeSelected;
+    const isHorizontal = direction === 'LR';
+
+    setNodes((prevNodes) => {
+      // Retain existing node positions (which include positions modified by drag)
+      const prevPosMap = new Map(prevNodes.map((pn) => [pn.id, pn.position]));
+
+      return rawNodes.map((n) => {
+        const isSelected = n.id === activeSelected;
+        const matchesSearch = searchQuery
+          ? n.id.toLowerCase().includes(searchQuery.toLowerCase())
+          : true;
+        const matchesFilter =
+          criticalityFilter === 'all'
+            ? true
+            : criticalityFilter === 'high'
+            ? n.data.score >= 0.45
+            : n.data.isSPOF;
+
+        const isDimmed =
+          (activeSelected ? !connectedNodeIds.has(n.id) : false) ||
+          !matchesSearch ||
+          !matchesFilter;
+
+        const pos = prevPosMap.get(n.id) ?? dagrePositions.get(n.id) ?? { x: 0, y: 0 };
+
+        return {
+          ...n,
+          type: 'service' as const,
+          selected: isSelected,
+          targetPosition: isHorizontal ? Position.Left : Position.Top,
+          sourcePosition: isHorizontal ? Position.Right : Position.Bottom,
+          position: pos,
+          data: {
+            ...n.data,
+            isSelected,
+            isDimmed,
+            direction,
+          },
+        };
+      });
+    });
+  }, [
+    rawNodes,
+    rawEdges,
+    dagrePositions,
+    activeSelected,
+    searchQuery,
+    criticalityFilter,
+    direction,
+    setNodes,
+  ]);
+
+  // Update edges with directional arrows, call volume scaling, and dimming for filtered/dimmed nodes
+  useEffect(() => {
+    if (rawNodes.length === 0) {
+      setEdges([]);
+      return;
+    }
+
+    const connectedNodeIds = new Set<string>();
+    if (activeSelected) {
+      connectedNodeIds.add(activeSelected);
+      rawEdges.forEach((e) => {
+        if (e.from === activeSelected) connectedNodeIds.add(e.to);
+        if (e.to === activeSelected) connectedNodeIds.add(e.from);
+      });
+    }
+
+    // Determine dimmed node IDs from active filter/search/selection
+    const dimmedNodeIds = new Set<string>();
+    rawNodes.forEach((n) => {
       const matchesSearch = searchQuery
         ? n.id.toLowerCase().includes(searchQuery.toLowerCase())
         : true;
@@ -454,25 +557,17 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
         !matchesSearch ||
         !matchesFilter;
 
-      return {
-        ...n,
-        selected: isSelected,
-        data: {
-          ...n.data,
-          isSelected,
-          isDimmed,
-          direction,
-        },
-      };
+      if (isDimmed) {
+        dimmedNodeIds.add(n.id);
+      }
     });
 
-    // Directional call edges with arrows
     const processedEdges: Edge[] = rawEdges.map((e, idx) => {
       const isConnected =
         activeSelected && (e.from === activeSelected || e.to === activeSelected);
-      const isDimmed = activeSelected ? !isConnected : false;
+      const touchesDimmedNode = dimmedNodeIds.has(e.from) || dimmedNodeIds.has(e.to);
+      const isDimmed = Boolean((activeSelected && !isConnected) || touchesDimmedNode);
 
-      // Color and marker styling
       const strokeColor = isConnected
         ? '#58a6ff'
         : e.frequency > 50
@@ -517,7 +612,7 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
       };
     });
 
-    return applyDagreLayout(nodesWithSelection, processedEdges, direction);
+    setEdges(processedEdges);
   }, [
     rawNodes,
     rawEdges,
@@ -525,17 +620,8 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
     searchQuery,
     criticalityFilter,
     animatedTraffic,
-    direction,
+    setEdges,
   ]);
-
-  const [nodes, setNodes, onNodesChange] = useNodesState(layoutedNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(layoutedEdges);
-
-  // Sync state when recalculated
-  useEffect(() => {
-    setNodes(layoutedNodes);
-    setEdges(layoutedEdges);
-  }, [layoutedNodes, layoutedEdges, setNodes, setEdges]);
 
   // Center on selected node if selected
   useEffect(() => {
@@ -565,10 +651,17 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
     handleSelectService(null);
     setSearchQuery('');
     setCriticalityFilter('all');
+    setLayoutResetToken((t) => t + 1);
+    setNodes((prevNodes) =>
+      prevNodes.map((n) => ({
+        ...n,
+        position: dagrePositions.get(n.id) ?? n.position,
+      }))
+    );
     setTimeout(() => {
       fitView({ padding: 0.2, duration: 500 });
     }, 50);
-  }, [fitView, handleSelectService]);
+  }, [fitView, handleSelectService, dagrePositions, setNodes]);
 
   // Selected Service Details for Inspector Drawer
   const selectedNodeDetails = useMemo(() => {
@@ -622,7 +715,9 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
             />
             {searchQuery && (
               <button
+                type="button"
                 onClick={() => setSearchQuery('')}
+                aria-label="Clear search"
                 className="absolute right-2 top-2 text-[#6e7681] hover:text-[#e6edf3]"
               >
                 <X className="h-3.5 w-3.5" />
@@ -826,7 +921,7 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
         {/* Selected Service Inspector Drawer (Right Side) */}
         {showInspector && selectedNodeDetails && (
           <div
-            className="absolute top-0 right-0 bottom-0 w-80 z-20 flex flex-col shadow-2xl backdrop-blur-md overflow-hidden"
+            className="absolute top-0 right-0 bottom-0 w-80 max-w-[calc(100%-1rem)] z-20 flex flex-col shadow-2xl backdrop-blur-md overflow-hidden"
             style={{
               backgroundColor: 'rgba(22, 27, 34, 0.95)',
               borderLeft: '1px solid #30363d',
@@ -856,7 +951,9 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
                 </div>
               </div>
               <button
+                type="button"
                 onClick={() => handleSelectService(null)}
+                aria-label="Close service inspector"
                 className="text-[#8b949e] hover:text-[#e6edf3] p-1 rounded"
               >
                 <X className="h-4 w-4" />
@@ -974,7 +1071,10 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
                     selectedNodeDetails.incoming.map((e, idx) => (
                       <div
                         key={idx}
-                        className="px-3 py-2 flex items-center justify-between hover:bg-[#161b22] cursor-pointer"
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Select caller service ${e.from}`}
+                        className="px-3 py-2 flex items-center justify-between hover:bg-[#161b22] cursor-pointer focus:outline-none focus:bg-[#161b22]"
                         style={{
                           borderBottom:
                             idx < selectedNodeDetails.incoming.length - 1
@@ -982,6 +1082,12 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
                               : 'none',
                         }}
                         onClick={() => handleSelectService(e.from)}
+                        onKeyDown={(ev) => {
+                          if (ev.key === 'Enter' || ev.key === ' ') {
+                            ev.preventDefault();
+                            handleSelectService(e.from);
+                          }
+                        }}
                       >
                         <span className="font-mono text-xs font-semibold text-[#e6edf3]">
                           {e.from}
@@ -1015,7 +1121,10 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
                     selectedNodeDetails.outgoing.map((e, idx) => (
                       <div
                         key={idx}
-                        className="px-3 py-2 flex items-center justify-between hover:bg-[#161b22] cursor-pointer"
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Select callee service ${e.to}`}
+                        className="px-3 py-2 flex items-center justify-between hover:bg-[#161b22] cursor-pointer focus:outline-none focus:bg-[#161b22]"
                         style={{
                           borderBottom:
                             idx < selectedNodeDetails.outgoing.length - 1
@@ -1023,6 +1132,12 @@ const DependencyGraphInternal: React.FC<DependencyGraphProps> = ({
                               : 'none',
                         }}
                         onClick={() => handleSelectService(e.to)}
+                        onKeyDown={(ev) => {
+                          if (ev.key === 'Enter' || ev.key === ' ') {
+                            ev.preventDefault();
+                            handleSelectService(e.to);
+                          }
+                        }}
                       >
                         <span className="font-mono text-xs font-semibold text-[#58a6ff]">
                           {e.to}
