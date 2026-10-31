@@ -268,14 +268,27 @@ func (m *Manager) StopExperiment(ctx context.Context, id, reason string) error {
 	m.mu.Lock()
 	cancel, ok := m.activeRuns[id]
 	m.mu.Unlock()
-	if !ok {
-		return fmt.Errorf("experiment %s is not actively running", id)
+	if ok {
+		cancel()
+		if err := m.transitionState(ctx, id, StateStopping, reason); err != nil {
+			return fmt.Errorf("failed to stop experiment %s: %w", id, err)
+		}
+		return nil
 	}
-	cancel()
-	if err := m.transitionState(ctx, id, StateStopping, reason); err != nil {
-		return fmt.Errorf("failed to stop experiment %s: %w", id, err)
+
+	// Handle orphaned runs (e.g. server restarted while experiment was RUNNING)
+	exp, err := m.repo.GetByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve experiment %s: %w", id, err)
 	}
-	return nil
+	if exp != nil && (exp.State == StateRunning || exp.State == StateStopping) {
+		if err := m.transitionState(ctx, id, StateAborted, reason); err != nil {
+			return fmt.Errorf("failed to abort orphaned experiment %s: %w", id, err)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("experiment %s is not actively running", id)
 }
 
 func (m *Manager) GetStatus(ctx context.Context, id string) (*Experiment, error) {

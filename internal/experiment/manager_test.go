@@ -245,10 +245,21 @@ func TestManager_TransitionState_ValidationAndPersistence(t *testing.T) {
 		t.Fatalf("failed to create experiment: %v", err)
 	}
 
-	// Attempting to stop an experiment that is in CREATED should fail transition validation (CREATED -> STOPPING is illegal)
+	// Attempting to stop an experiment that is in CREATED should fail validation (not actively running)
 	err = mgr.StopExperiment(context.Background(), exp.ID, "stop created")
 	if err == nil {
 		t.Errorf("expected StopExperiment on CREATED experiment to fail validation, got nil")
+	}
+
+	// An orphaned experiment (RUNNING in repo but not in memory activeRuns) can be stopped cleanly to ABORTED
+	_ = repo.UpdateState(context.Background(), exp.ID, experiment.StateRunning, "")
+	err = mgr.StopExperiment(context.Background(), exp.ID, "manual stop of orphaned run")
+	if err != nil {
+		t.Fatalf("expected StopExperiment on orphaned RUNNING experiment to succeed, got %v", err)
+	}
+	updated, _ := repo.GetByID(context.Background(), exp.ID)
+	if updated.State != experiment.StateAborted {
+		t.Errorf("expected orphaned experiment state to be ABORTED, got %s", updated.State)
 	}
 }
 
