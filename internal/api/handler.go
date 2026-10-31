@@ -527,6 +527,7 @@ func (h *Handler) GetExperimentStatus(w http.ResponseWriter, r *http.Request) {
 		ExperimentID:  id,
 		TargetService: exp.TargetService,
 		Timestamp:     exp.CreatedAt,
+		Availability:  1.0,
 	})
 }
 

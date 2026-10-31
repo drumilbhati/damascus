@@ -121,6 +121,12 @@ func (c *PrometheusClient) QuerySnapshot(ctx context.Context, experimentID, targ
 	if err != nil {
 		return snapshot, fmt.Errorf("failed to query request rate: %w", err)
 	}
+	if reqRate == 0 && targetService != "" {
+		otelReqQuery := fmt.Sprintf(`sum(rate(oteldemo_http_server_duration_milliseconds_count{exported_job=%q}[30s]))`, targetService)
+		if r, qErr := c.QueryValue(ctx, otelReqQuery); qErr == nil && r > 0 {
+			reqRate = r
+		}
+	}
 	snapshot.RequestRate = reqRate
 
 	// 2. Query P95 Latency (Convert seconds to milliseconds)
@@ -129,13 +135,26 @@ func (c *PrometheusClient) QuerySnapshot(ctx context.Context, experimentID, targ
 	if err != nil {
 		return snapshot, fmt.Errorf("failed to query p95 latency: %w", err)
 	}
-	snapshot.P95LatencyMs = p95Seconds * 1000.0
+	p95Ms := p95Seconds * 1000.0
+	if p95Ms == 0 && targetService != "" {
+		otelP95Query := fmt.Sprintf(`histogram_quantile(0.95, sum(rate(oteldemo_http_server_duration_milliseconds_bucket{exported_job=%q}[30s])) by (le))`, targetService)
+		if ms, qErr := c.QueryValue(ctx, otelP95Query); qErr == nil && ms > 0 {
+			p95Ms = ms
+		}
+	}
+	snapshot.P95LatencyMs = p95Ms
 
 	// 3. Query Error Rate & Compute Availability
 	errRateQuery := BuildErrorRateQuery(targetService)
 	errRate, err := c.QueryValue(ctx, errRateQuery)
 	if err != nil {
 		return snapshot, fmt.Errorf("failed to query error rate: %w", err)
+	}
+	if errRate == 0 && targetService != "" {
+		otelErrQuery := fmt.Sprintf(`sum(rate(oteldemo_http_server_duration_milliseconds_count{http_status_code=~"5..",exported_job=%q}[30s])) / sum(rate(oteldemo_http_server_duration_milliseconds_count{exported_job=%q}[30s]))`, targetService, targetService)
+		if er, qErr := c.QueryValue(ctx, otelErrQuery); qErr == nil && !math.IsNaN(er) {
+			errRate = er
+		}
 	}
 	snapshot.ErrorRate = errRate
 
