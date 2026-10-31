@@ -309,6 +309,10 @@ func (m *Manager) transitionState(ctx context.Context, id string, target Experim
 		return fmt.Errorf("experiment %s was not found", id)
 	}
 
+	if exp.State == target {
+		return nil
+	}
+
 	if err := ValidateTransition(exp.State, target); err != nil {
 		return err
 	}
