@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useExperiments, useExperimentReport } from '../api/hooks';
+import { ReportView } from '../components/ReportView';
 import {
   FileSpreadsheet,
-  CheckCircle2,
 } from 'lucide-react';
 
 export const ReportsPage: React.FC = () => {
@@ -91,74 +91,7 @@ export const ReportsPage: React.FC = () => {
                 Select an experiment to view its analysis metrics.
               </div>
             ) : (
-              <div className="space-y-4">
-                {/* Summary stat cards */}
-                <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                  <div className="rounded p-4" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
-                    <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>
-                      Sustainable Ceiling
-                    </div>
-                    <div className="mt-2 font-mono text-2xl font-bold" style={{ color: '#3fb950' }}>
-                      {report.maximum_sustainable_rate}
-                    </div>
-                    <div className="mt-0.5 font-mono text-[11px]" style={{ color: '#6e7681' }}>RPS · zero SLA violations</div>
-                  </div>
-
-                  <div className="rounded p-4" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
-                    <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>
-                      Knee Degradation
-                    </div>
-                    <div className="mt-2 font-mono text-2xl font-bold" style={{ color: '#d29922' }}>
-                      {report.degradation_rate}
-                    </div>
-                    <div className="mt-0.5 font-mono text-[11px]" style={{ color: '#6e7681' }}>RPS · latency slope &gt;50%</div>
-                  </div>
-
-                  <div className="rounded p-4" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
-                    <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>
-                      Safety Breach Rate
-                    </div>
-                    <div className="mt-2 font-mono text-2xl font-bold" style={{ color: '#f85149' }}>
-                      {report.safety_boundary_rate}
-                    </div>
-                    <div className="mt-0.5 font-mono text-[11px]" style={{ color: '#6e7681' }}>RPS · hard boundary breach</div>
-                  </div>
-
-                  <div className="rounded p-4" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
-                    <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>
-                      Recovery Time
-                    </div>
-                    <div className="mt-2 font-mono text-2xl font-bold" style={{ color: '#58a6ff' }}>
-                      {report.recovery_time_sec}s
-                    </div>
-                    <div className="mt-0.5 font-mono text-[11px]" style={{ color: '#6e7681' }}>return to baseline SLA</div>
-                  </div>
-                </div>
-
-                {/* Recommendations */}
-                <div
-                  className="rounded p-4 space-y-3"
-                  style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}
-                >
-                  <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>
-                    Automated Engineering Recommendations
-                  </div>
-                  {report.recommendations && report.recommendations.length > 0 ? (
-                    <ul className="space-y-2">
-                      {report.recommendations.map((rec, i) => (
-                        <li key={i} className="flex items-start gap-2 text-xs">
-                          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 mt-0.5" style={{ color: '#3fb950' }} />
-                          <span style={{ color: '#8b949e' }}>{rec}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-[11px]" style={{ color: '#6e7681' }}>
-                      System operated within normal operational thresholds. No auto-remediations required.
-                    </p>
-                  )}
-                </div>
-              </div>
+              <ReportView report={report} />
             )}
           </div>
         </div>

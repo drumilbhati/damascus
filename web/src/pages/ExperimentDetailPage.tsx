@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useExperiment, useExperimentStatus } from '../api/hooks';
 import { startExperiment, stopExperiment } from '../api/endpoints';
+import { MetricsChart } from '../components/MetricsChart';
 import {
   Play,
   Square,
@@ -223,6 +224,13 @@ export const ExperimentDetailPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Live Telemetry Streaming Chart */}
+      <MetricsChart
+        snapshot={snapshot}
+        isRunning={isRunning}
+        config={experiment.config}
+      />
 
       {/* Config detail grids */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
