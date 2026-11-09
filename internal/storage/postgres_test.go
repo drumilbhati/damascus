@@ -468,9 +468,10 @@ func TestPostgresExperimentRepository_Observations(t *testing.T) {
 			error_rate,
 			availability,
 			cpu_utilization,
-			memory_utilization
+			memory_utilization,
+            injected_rate
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8
+			$1, $2, $3, $4, $5, $6, $7, $8, $9
 		)`)).WithArgs(
 			"exp-obs",
 			now,
@@ -480,6 +481,7 @@ func TestPostgresExperimentRepository_Observations(t *testing.T) {
 			obs.Availability,
 			obs.CPUUtilization,
 			obs.MemoryUtilization,
+			obs.InjectedRate,
 		).WillReturnResult(sqlmock.NewResult(1, 1))
 
 		if err := repo.SaveObservation(ctx, "exp-obs", obs); err != nil {
@@ -494,6 +496,7 @@ func TestPostgresExperimentRepository_Observations(t *testing.T) {
 			"availability",
 			"cpu_utilization",
 			"memory_utilization",
+			"injected_rate",
 		}
 
 		rows := sqlmock.NewRows(columns).AddRow(
@@ -504,9 +507,10 @@ func TestPostgresExperimentRepository_Observations(t *testing.T) {
 			0.99,
 			0.45,
 			0.60,
+			nil,
 		)
 
-		mock.ExpectQuery(regexp.QuoteMeta("SELECT timestamp, load_rate, p95_latency, error_rate, availability, cpu_utilization, memory_utilization FROM observations WHERE experiment_id = $1 ORDER BY timestamp ASC, id ASC")).
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT timestamp, load_rate, p95_latency, error_rate, availability, cpu_utilization, memory_utilization, injected_rate FROM observations WHERE experiment_id = $1 ORDER BY timestamp ASC, id ASC")).
 			WithArgs("exp-obs").
 			WillReturnRows(rows)
 

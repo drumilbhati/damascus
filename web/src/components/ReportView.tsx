@@ -115,11 +115,11 @@ function transformObservations(
   report: ExperimentReport
 ): TransformedObservationPoint[] {
   // Sort observations by load rate ascending for proper capacity curve progression
-  const sorted = [...observations].sort((a, b) => a.load_rate - b.load_rate);
+  const sorted = [...observations].sort((a, b) => (a.injected_rate ?? a.load_rate) - (b.injected_rate ?? b.load_rate));
 
   return sorted.map((obs, idx) => {
-    const isDegraded = report.degradation_rate > 0 && obs.load_rate >= report.degradation_rate;
-    const isBreached = report.safety_boundary_rate > 0 && obs.load_rate >= report.safety_boundary_rate;
+    const isDegraded = report.degradation_rate > 0 && (obs.injected_rate ?? obs.load_rate) >= report.degradation_rate;
+    const isBreached = report.safety_boundary_rate > 0 && (obs.injected_rate ?? obs.load_rate) >= report.safety_boundary_rate;
 
     const rawError = obs.error_rate ?? 0;
     const errorRatePercent = Math.min(100, Math.max(0, rawError > 1 ? rawError : rawError * 100));
@@ -136,7 +136,7 @@ function transformObservations(
       index: idx + 1,
       timestamp: obs.timestamp,
       timeLabel,
-      loadRate: Math.max(0, obs.load_rate || 0),
+      loadRate: Math.max(0, obs.injected_rate ?? obs.load_rate ?? 0),
       p95LatencyMs: Math.max(0, obs.p95_latency_ms || 0),
       errorRatePercent,
       availabilityPercent,

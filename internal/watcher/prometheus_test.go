@@ -18,6 +18,55 @@ type mockPromAPI struct {
 	queryFn func(ctx context.Context, query string, ts time.Time, opts ...promv1.Option) (model.Value, promv1.Warnings, error)
 }
 
+func TestQuerySnapshot_MissingTelemetryIsNotHealthy(t *testing.T) {
+	client := watcher.NewPrometheusClientWithAPI(&mockPromAPI{
+		queryFn: func(context.Context, string, time.Time, ...promv1.Option) (model.Value, promv1.Warnings, error) {
+			return model.Vector{}, nil, nil
+		},
+	})
+	_, err := client.QuerySnapshot(context.Background(), "exp", "emailservice")
+	if err == nil || !strings.Contains(err.Error(), "no telemetry samples") {
+		t.Fatalf("expected missing telemetry error, got %v", err)
+	}
+}
+
+func TestQuerySnapshot_GRPCSpanMetricsFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		errors float64
+	}{{"successful calls", 0}, {"failed calls", 2}} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := watcher.NewPrometheusClientWithAPI(&mockPromAPI{
+				queryFn: func(_ context.Context, query string, _ time.Time, _ ...promv1.Option) (model.Value, promv1.Warnings, error) {
+					if !strings.Contains(query, "oteldemo_damascus_") {
+						return model.Vector{}, nil, nil
+					}
+					if !strings.Contains(query, `service_name="productcatalogservice"`) || !strings.Contains(query, `span_kind="SPAN_KIND_SERVER"`) {
+						t.Fatalf("missing service/server filter: %s", query)
+					}
+					value := 10.0
+					if strings.Contains(query, "duration_seconds_bucket") {
+						value = 0.025
+					} else if strings.Contains(query, `status_code="STATUS_CODE_ERROR"`) {
+						if tc.errors == 0 {
+							return model.Vector{}, nil, nil
+						}
+						value = tc.errors
+					}
+					return model.Vector{&model.Sample{Value: model.SampleValue(value)}}, nil, nil
+				},
+			})
+			snapshot, err := client.QuerySnapshot(context.Background(), "exp", "productcatalogservice")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.RequestRate != 10 || snapshot.P95LatencyMs != 25 || snapshot.ErrorRate != tc.errors/10 || snapshot.Availability != 1-tc.errors/10 {
+				t.Fatalf("incorrect span-derived snapshot: %+v", snapshot)
+			}
+		})
+	}
+}
+
 func (m *mockPromAPI) Query(ctx context.Context, query string, ts time.Time, opts ...promv1.Option) (model.Value, promv1.Warnings, error) {
 	if m.queryFn != nil {
 		return m.queryFn(ctx, query, ts, opts...)

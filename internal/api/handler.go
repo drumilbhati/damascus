@@ -522,13 +522,8 @@ func (h *Handler) GetExperimentStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 3. If experiment has no telemetry recorded yet, return a baseline snapshot
-	h.writeJSON(w, http.StatusOK, watcher.MetricSnapshot{
-		ExperimentID:  id,
-		TargetService: exp.TargetService,
-		Timestamp:     exp.CreatedAt,
-		Availability:  1.0,
-	})
+	// Missing measurements must not look like zero latency and perfect availability.
+	h.writeError(w, http.StatusServiceUnavailable, "No telemetry available for this experiment; check target connectivity and metric export for the selected service")
 }
 
 // GetDependencies handles GET /api/dependencies

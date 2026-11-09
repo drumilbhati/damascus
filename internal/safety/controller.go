@@ -37,7 +37,7 @@ func (sc *SafetyController) Evaluate(snapshot watcher.MetricSnapshot) SafetyDeci
 	// TODO: Check Error Rate SLA breach:
 	// If sc.policy.MaxErrorRate > 0 and snapshot.ErrorRate > sc.policy.MaxErrorRate,
 	// return SafetyDecision{ShouldStop: true, Reason: fmt.Sprintf("Error rate breached SLA: %.2f%% > %.2f%%", ...)}
-	if sc.policy.MaxErrorRate > 0 && snapshot.ErrorRate > sc.policy.MaxErrorRate {
+	if sc.policy.MaxErrorRate >= 0 && snapshot.ErrorRate > sc.policy.MaxErrorRate {
 		return SafetyDecision{
 			ShouldStop: true,
 			Reason:     fmt.Sprintf("Error rate breached SLA: %.2f%% > %.2f%%", snapshot.ErrorRate*100, sc.policy.MaxErrorRate*100),

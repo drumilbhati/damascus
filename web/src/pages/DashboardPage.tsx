@@ -54,9 +54,9 @@ function StateBadge({ state }: { state: string }) {
 }
 
 export const DashboardPage: React.FC = () => {
-  const { data: experiments, isLoading: loadingExps } = useExperiments();
-  const { data: health } = useHealth();
-  const { data: deps } = useDependencies();
+  const { data: experiments, isLoading: loadingExps, error: experimentsError } = useExperiments();
+  const { data: health, error: healthError } = useHealth();
+  const { data: deps, error: dependenciesError } = useDependencies();
 
   const total = experiments?.length || 0;
   const running = experiments?.filter((e) => e.state === 'RUNNING').length || 0;
@@ -66,6 +66,17 @@ export const DashboardPage: React.FC = () => {
 
   return (
     <div className="space-y-5">
+      {(experimentsError || healthError || dependenciesError || health?.status === 'DOWN') && (
+        <div role="alert" className="rounded border border-red-800 bg-red-950 p-4 text-sm text-red-200">
+          <p>Some dashboard services are unavailable.</p>
+          {experimentsError && <p>Experiments: {experimentsError.message}</p>}
+          {healthError && <p>Health check: {healthError.message}</p>}
+          {dependenciesError && <p>Dependencies: {dependenciesError.message}</p>}
+          {health?.status === 'DOWN' && (
+            <p>Target: {health.target}; Jaeger: {health.jaeger}; Prometheus: {health.prometheus}</p>
+          )}
+        </div>
+      )}
       {/* Page header - compact, no gradient */}
       <div className="flex items-start justify-between">
         <div>

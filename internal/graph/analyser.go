@@ -31,6 +31,7 @@ type jaegerSpan struct {
 type jaegerReference struct {
 	RefType string `json:"refType"` // "CHILD_OF"
 	SpanID  string `json:"spanID"`
+	TraceID string `json:"traceID"`
 }
 
 type jaegerProcess struct {
@@ -60,6 +61,9 @@ func NewAnalyzer(jaegerBaseURL string, client *http.Client) *Analyzer {
 
 // BuildGraph fetches traces from Jaeger and stitches them into a DependencyGraph.
 func (a *Analyzer) BuildGraph(ctx context.Context, lookbackDuration int64) (*DependencyGraph, error) {
+	// Bound the whole multi-service query within the API's response budget.
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
 	graph := NewDependencyGraph()
 
 	// 1. Fetch list of active services from /api/services
@@ -87,9 +91,19 @@ func (a *Analyzer) BuildGraph(ctx context.Context, lookbackDuration int64) (*Dep
 	if lookbackDuration > 0 {
 		lookbackStr = fmt.Sprintf("%ds", lookbackDuration)
 	}
+	windowSeconds := float64(lookbackDuration)
+	if windowSeconds <= 0 {
+		windowSeconds = 3600
+	}
+	// A distributed trace appears in queries for several participating services.
+	// Count each observed parent/child pair only once across all responses.
+	seenCalls := make(map[[4]string]bool)
+	edgeIndexes := make(map[[2]string]int)
 
 	// 2. For each discovered service, query /api/traces
 	for _, service := range jaegerServices.Data {
+		// Keep registered services even when the selected window has no spans.
+		graph.AddNode(service, nil)
 		queryParams := url.Values{}
 		queryParams.Set("service", service)
 		queryParams.Set("limit", "50")
@@ -122,6 +136,9 @@ func (a *Analyzer) BuildGraph(ctx context.Context, lookbackDuration int64) (*Dep
 			spanToService := make(map[string]string)
 			for _, span := range trace.Spans {
 				serviceName := trace.Processes[span.ProcessID].ServiceName
+				if serviceName == "" {
+					continue
+				}
 				spanToService[span.SpanID] = serviceName
 				graph.AddNode(serviceName, nil)
 			}
@@ -131,12 +148,24 @@ func (a *Analyzer) BuildGraph(ctx context.Context, lookbackDuration int64) (*Dep
 				for _, ref := range span.References {
 					if ref.RefType == "CHILD_OF" {
 						parentService := spanToService[ref.SpanID]
-						if parentService != "" && parentService != childService {
+						if parentService != "" && childService != "" && parentService != childService && (ref.TraceID == "" || ref.TraceID == trace.TraceID) {
+							callKey := [4]string{trace.TraceID, span.SpanID, trace.TraceID, ref.SpanID}
+							if seenCalls[callKey] {
+								continue
+							}
+							seenCalls[callKey] = true
+							edgeKey := [2]string{parentService, childService}
+							if index, exists := edgeIndexes[edgeKey]; exists {
+								graph.Edges[index].CallCount++
+								graph.Edges[index].Frequency = float64(graph.Edges[index].CallCount) / windowSeconds
+								continue
+							}
+							edgeIndexes[edgeKey] = len(graph.Edges)
 							graph.AddEdge(DependencyEdge{
 								From:      parentService,
 								To:        childService,
 								CallCount: 1,
-								Frequency: 1.0,
+								Frequency: 1.0 / windowSeconds,
 							})
 						}
 					}

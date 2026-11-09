@@ -88,6 +88,7 @@ export interface HealthStatus {
 export interface CapacityObservation {
   timestamp: string;
   load_rate: number;
+  injected_rate?: number;
   p95_latency_ms: number;
   error_rate: number;
   availability: number;

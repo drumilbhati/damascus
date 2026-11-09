@@ -485,9 +485,10 @@ func (r *PostgresExperimentRepository) SaveObservation(ctx context.Context, expI
 			error_rate,
 			availability,
 			cpu_utilization,
-			memory_utilization
+			memory_utilization,
+            injected_rate
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8
+			$1, $2, $3, $4, $5, $6, $7, $8, $9
 		)`
 
 	loadRate := int(math.Round(obs.LoadRate))
@@ -501,6 +502,7 @@ func (r *PostgresExperimentRepository) SaveObservation(ctx context.Context, expI
 		obs.Availability,
 		obs.CPUUtilization,
 		obs.MemoryUtilization,
+		obs.InjectedRate,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to insert observation for experiment %s: %w", expID, err)
@@ -523,7 +525,8 @@ func (r *PostgresExperimentRepository) GetObservations(ctx context.Context, expI
 			error_rate,
 			availability,
 			cpu_utilization,
-			memory_utilization
+			memory_utilization,
+            injected_rate
 		FROM observations
 		WHERE experiment_id = $1
 		ORDER BY timestamp ASC, id ASC`
@@ -549,6 +552,7 @@ func (r *PostgresExperimentRepository) GetObservations(ctx context.Context, expI
 			&obs.Availability,
 			&obs.CPUUtilization,
 			&obs.MemoryUtilization,
+			&obs.InjectedRate,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan observation row: %w", err)
@@ -803,4 +807,10 @@ func (r *PostgresExperimentRepository) GetServiceScores(ctx context.Context, exp
 	}
 
 	return scores, nil
+}
+
+// EnsureObservationSchema upgrades existing local volumes without dropping data.
+func EnsureObservationSchema(ctx context.Context, db DBTX) error {
+	_, err := db.ExecContext(ctx, "ALTER TABLE observations ADD COLUMN IF NOT EXISTS injected_rate DOUBLE PRECISION")
+	return err
 }

@@ -392,9 +392,9 @@ func generateRecommendations(
 
 // degradationPoint aggregates telemetry for an individual load rate.
 type degradationPoint struct {
-	loadRate   int
-	avgP95Ms   float64
-	avgError   float64
+	loadRate int
+	avgP95Ms float64
+	avgError float64
 }
 
 // renderDegradationCurveSVG builds an inline SVG diagram displaying load rate vs P95 latency.
@@ -408,7 +408,7 @@ func renderDegradationCurveSVG(report *capacity.ExperimentReport) template.HTML 
 	tiersMap := make(map[int]*tierAgg)
 
 	for _, obs := range report.Observations {
-		rate := int(math.Round(obs.LoadRate))
+		rate := int(math.Round(obs.OfferedRate()))
 		if rate <= 0 {
 			continue
 		}
@@ -610,7 +610,7 @@ func templateFuncs() template.FuncMap {
 			return a + b
 		},
 		"statusBadge": func(obs capacity.Observation, report *capacity.ExperimentReport) template.HTML {
-			rate := int(math.Round(obs.LoadRate))
+			rate := int(math.Round(obs.OfferedRate()))
 			if rate <= 0 {
 				return template.HTML(`<span class="badge badge-gray">Idle / Recovery</span>`)
 			}
@@ -1040,7 +1040,7 @@ const defaultHTMLTemplate = `<!DOCTYPE html>
             <tr>
               <td>{{add $idx 1}}</td>
               <td>{{formatTime $obs.Timestamp}}</td>
-              <td><strong>{{formatFloat $obs.LoadRate 0}} RPS</strong></td>
+              <td><strong>{{formatFloat $obs.OfferedRate 0}} RPS</strong></td>
               <td>{{formatFloat $obs.P95LatencyMs 1}} ms</td>
               <td>{{formatPercent $obs.ErrorRate}}</td>
               <td>{{formatPercent $obs.Availability}}</td>

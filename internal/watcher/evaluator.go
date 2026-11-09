@@ -85,6 +85,7 @@ type WatcherEngine struct {
 	mu      sync.Mutex
 	cancel  context.CancelFunc
 	running bool
+	done    chan struct{}
 }
 
 // NewWatcherEngine constructs a WatcherEngine.
@@ -130,6 +131,7 @@ func (e *WatcherEngine) Start(ctx context.Context, experimentID, targetService s
 	loopCtx, cancel := context.WithCancel(ctx)
 	e.cancel = cancel
 	e.running = true
+	e.done = make(chan struct{})
 	e.consecutiveFailures.Store(0)
 
 	go e.pollLoop(loopCtx, experimentID, targetService)
@@ -140,13 +142,12 @@ func (e *WatcherEngine) Start(ctx context.Context, experimentID, targetService s
 // Calling Stop on an engine that is not running is a no-op.
 func (e *WatcherEngine) Stop() {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if !e.running {
-		return
+	cancel, done := e.cancel, e.done
+	e.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		<-done
 	}
-	e.cancel()
-	e.running = false
 }
 
 // ConsecutiveFailures returns the current consecutive Prometheus error count.
@@ -158,6 +159,7 @@ func (e *WatcherEngine) ConsecutiveFailures() int {
 // pollLoop is the internal goroutine that ticks at pollInterval and drives
 // metric collection + observability-loss detection.
 func (e *WatcherEngine) pollLoop(ctx context.Context, experimentID, targetService string) {
+	defer func() { e.mu.Lock(); e.running = false; close(e.done); e.cancel = nil; e.mu.Unlock() }()
 	ticker := time.NewTicker(e.pollInterval)
 	defer ticker.Stop()
 
@@ -234,9 +236,10 @@ func (e *WatcherEngine) emitSyntheticBreach(experimentID, targetService string, 
 	)
 
 	synthetic := MetricSnapshot{
-		ExperimentID:  experimentID,
-		TargetService: targetService,
-		Timestamp:     time.Now().UTC(),
+		TelemetryError: reason,
+		ExperimentID:   experimentID,
+		TargetService:  targetService,
+		Timestamp:      time.Now().UTC(),
 
 		// Worst-case metric values to guarantee a SafetyController stop.
 		ErrorRate:    SyntheticBreachErrorRate,
@@ -275,15 +278,15 @@ func BuildSyntheticBreachSnapshot(experimentID, targetService string, consecutiv
 		"loss-of-observability: %d consecutive Prometheus query failures: %v",
 		consecutiveFailures, cause,
 	)
-	_ = reason // stored in snapshot comment; callers log it separately
 
 	return MetricSnapshot{
-		ExperimentID:  experimentID,
-		TargetService: targetService,
-		Timestamp:     time.Now().UTC(),
-		ErrorRate:     SyntheticBreachErrorRate,
-		Availability:  SyntheticBreachAvailability,
-		P95LatencyMs:  0,
-		RequestRate:   0,
+		TelemetryError: reason,
+		ExperimentID:   experimentID,
+		TargetService:  targetService,
+		Timestamp:      time.Now().UTC(),
+		ErrorRate:      SyntheticBreachErrorRate,
+		Availability:   SyntheticBreachAvailability,
+		P95LatencyMs:   0,
+		RequestRate:    0,
 	}
 }

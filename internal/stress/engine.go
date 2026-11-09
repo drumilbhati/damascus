@@ -7,115 +7,147 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// Engine implements the interfaces.StressEngine contract.
+// Engine executes one finite load plan at a time.
 type Engine struct {
-	client  *http.Client
-	cancel  context.CancelFunc
-	running bool
-	wg      sync.WaitGroup
-	mu      sync.Mutex
+	client *http.Client
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	done   chan struct{}
+	rate   atomic.Int64
 }
 
-// NewEngine initializes a new stress engine instance.
 func NewEngine(client *http.Client) *Engine {
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
-	return &Engine{
-		client: client,
-	}
+	return &Engine{client: client}
 }
 
-// Start initiates the rate-controlled traffic generation.
+// CurrentRate is the offered load for the current step, independent of service traffic.
+func (e *Engine) CurrentRate() int { return int(e.rate.Load()) }
+
 func (e *Engine) Start(ctx context.Context, plan LoadPlan) error {
-	if plan.InitialRate <= 0 {
-		return fmt.Errorf("initial rate must be greater than 0, got %d", plan.InitialRate)
+	if err := plan.Validate(); err != nil {
+		return err
 	}
-	if plan.InitialRate > 1_000_000_000 {
-		return fmt.Errorf("initial rate exceeds maximum supported limit of 1,000,000,000 req/s, got %d", plan.InitialRate)
+	if plan.MaxRate > 1_000_000_000 {
+		return fmt.Errorf("maximum supported rate is 1,000,000,000 req/s")
 	}
-
-	interval := time.Second / time.Duration(plan.InitialRate)
-	if interval <= 0 {
-		return fmt.Errorf("computed ticker interval must be positive, got %v", interval)
-	}
-
 	e.mu.Lock()
-	if e.running {
+	if e.done != nil {
 		e.mu.Unlock()
 		return fmt.Errorf("stress engine is already running an active load plan")
 	}
-	e.running = true
-	ctx, e.cancel = context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	e.cancel, e.done = cancel, done
 	e.mu.Unlock()
-
+	var workers sync.WaitGroup
+	failures := make(chan error, 1)
+	// Bound work in flight so slow endpoints cannot exhaust the generator.
+	slots := make(chan struct{}, 256)
 	defer func() {
+		cancel()
+		workers.Wait()
+		e.rate.Store(0)
 		e.mu.Lock()
-		e.running = false
-		e.cancel = nil
+		e.cancel, e.done = nil, nil
+		close(done)
 		e.mu.Unlock()
 	}()
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	for {
+	fail := func(err error) {
 		select {
-		case <-ctx.Done():
-			e.wg.Wait()
-			return ctx.Err()
-
-		case <-ticker.C:
-			e.wg.Add(1)
-			go func() {
-				e.sendRequest(ctx, plan)
-			}()
+		case failures <- err:
+		default:
+		}
+		cancel()
+	}
+	for rate := plan.InitialRate; ; {
+		e.rate.Store(int64(rate))
+		ticker := time.NewTicker(time.Second / time.Duration(rate))
+		timer := time.NewTimer(time.Duration(plan.StepDurationSeconds) * time.Second)
+		stepDone := false
+		for !stepDone {
+			select {
+			case <-runCtx.Done():
+				stepDone = true
+			case <-timer.C:
+				stepDone = true
+			case <-ticker.C:
+				select {
+				case slots <- struct{}{}:
+					workers.Add(1)
+					go func() {
+						defer workers.Done()
+						defer func() { <-slots }()
+						if err := e.sendRequest(runCtx, plan); err != nil && runCtx.Err() == nil {
+							fail(err)
+						}
+					}()
+				default:
+					fail(fmt.Errorf("load generator reached its in-flight request limit"))
+				}
+			}
+		}
+		ticker.Stop()
+		timer.Stop()
+		if runCtx.Err() != nil {
+			break
+		}
+		if rate == plan.MaxRate {
+			break
+		}
+		if plan.MaxRate-rate < plan.StepRate {
+			rate = plan.MaxRate
+		} else {
+			rate += plan.StepRate
 		}
 	}
+	// Finish in-flight requests before reporting normal completion.
+	workers.Wait()
+	select {
+	case err := <-failures:
+		return err
+	default:
+	}
+	return runCtx.Err()
 }
 
-// sendRequest executes a single HTTP request with context propagation.
-func (e *Engine) sendRequest(ctx context.Context, plan LoadPlan) {
-	defer e.wg.Done()
-
-	var body io.Reader
-	if plan.Payload != "" {
-		body = strings.NewReader(plan.Payload)
-	}
-	req, err := http.NewRequestWithContext(ctx, plan.Method, plan.TargetURL, body)
+func (e *Engine) sendRequest(ctx context.Context, plan LoadPlan) error {
+	req, err := http.NewRequestWithContext(ctx, plan.Method, plan.TargetURL, strings.NewReader(plan.Payload))
 	if err != nil {
-		fmt.Printf("Error creating request: %v\n", err)
-		return
+		return fmt.Errorf("build load request: %w", err)
 	}
-
+	if plan.Payload != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := e.client.Do(req)
 	if err != nil {
-		fmt.Printf("Error sending request: %v\n", err)
-		return
+		// Network-level failure (connection refused, DNS, timeout): the target
+		// is unreachable so no load can be generated. Abort the experiment.
+		return fmt.Errorf("send load request: %w", err)
 	}
-	if resp != nil {
-		if _, copyErr := io.Copy(io.Discard, resp.Body); copyErr != nil {
-			fmt.Printf("Error draining response body: %v\n", copyErr)
-		}
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			fmt.Printf("Error closing response body: %v\n", closeErr)
-		}
+	defer resp.Body.Close()
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		return fmt.Errorf("read load response: %w", err)
 	}
-
-	fmt.Printf("Request to %s returned status %s\n", plan.TargetURL, resp.Status)
+	// HTTP 4xx/5xx are valid responses from the target service under load.
+	// They are counted as error rate by Prometheus/WatcherEngine and evaluated
+	// by SafetyController. Aborting the experiment here would stop it the
+	// moment the service starts degrading — the opposite of what we want.
+	return nil
 }
 
-// Stop cleanly aborts all in-flight workers and dispatch loops.
 func (e *Engine) Stop() {
 	e.mu.Lock()
-	cancel := e.cancel
+	cancel, done := e.cancel, e.done
 	e.mu.Unlock()
-
 	if cancel != nil {
 		cancel()
-		e.wg.Wait()
+		<-done
 	}
 }

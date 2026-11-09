@@ -69,6 +69,9 @@ func (r *mockRepo) UpdateState(ctx context.Context, id string, state experiment.
 		return errors.New("not found")
 	}
 	exp.State = state
+	if stopReason != "" {
+		exp.StopReason = stopReason
+	}
 	r.stateHistory = append(r.stateHistory, state)
 	return nil
 }
@@ -153,8 +156,7 @@ func (w *mockWatcher) Start(ctx context.Context, experimentID string, targetServ
 	w.mu.Lock()
 	w.running = true
 	w.mu.Unlock()
-	<-ctx.Done()
-	return ctx.Err()
+	return nil
 }
 
 func (w *mockWatcher) Stop() {

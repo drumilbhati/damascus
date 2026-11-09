@@ -243,8 +243,4 @@ docker compose up -d
 - **Jaeger Tracing Console**: `http://localhost:16686`
 - **Prometheus Console**: `http://localhost:9090`
 - **Astronomy Shop Frontend**: `http://localhost:8085`
-- **Control Plane REST API**: `http://localhost:8080/api/health`
-- **Jaeger Tracing Console**: `http://localhost:16686`
-- **Prometheus Console**: `http://localhost:9090`
-- **Astronomy Shop Frontend**: `http://localhost:8085`
 

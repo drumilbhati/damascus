@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useExperiments, useServices } from '../api/hooks';
+import { useExperiments, useDependencies } from '../api/hooks';
 import { createExperiment } from '../api/endpoints';
 import type { ExperimentType, ExperimentConfig } from '../types';
 import { FlaskConical, Plus, ArrowRight, X, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
@@ -33,7 +33,7 @@ export const ExperimentsPage: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // New flow: URL first, then service selected from discovered list
+  // An explicit user choice overrides the current score recommendation.
   const [targetURL, setTargetURL] = useState('');
   const [targetService, setTargetService] = useState(targetParam || '');
 
@@ -49,25 +49,39 @@ export const ExperimentsPage: React.FC = () => {
 
   const [expType, setExpType] = useState<ExperimentType>('ramp');
   const [config, setConfig] = useState<ExperimentConfig>({
-    initial_rate: 10,
-    step_rate: 10,
-    max_rate: 100,
-    step_duration_seconds: 5,
-    max_p95_latency_ms: 150,
-    max_error_rate_percent: 2.0,
-    min_availability_pct: 99.0,
-    recovery_window_sec: 5,
+    initial_rate: 1,
+    step_rate: 1,
+    max_rate: 5,
+    step_duration_seconds: 15,
+    max_p95_latency_ms: 1000,
+    max_error_rate_percent: 5,
+    min_availability_pct: 95,
+    recovery_window_sec: 10,
   });
 
-  // Only fetch services when the modal is open
-  const { data: servicesData, isLoading: loadingServices, error: servicesError, mutate: refetchServices } = useServices(showModal);
-
-  const availableServices = useMemo(() => servicesData?.services ?? [], [servicesData?.services]);
+  const { data: dependencies, isLoading: loadingServices, isValidating: refreshingServices, error: servicesError, mutate: refetchServices } = useDependencies(3600, showModal);
+  const [refreshMessage, setRefreshMessage] = useState('');
+  const refreshRecommendation = async () => {
+    setRefreshMessage('');
+    try {
+      await refetchServices();
+      setRefreshMessage(`Scores refreshed at ${new Date().toLocaleTimeString()}. Rankings may remain unchanged when the observed topology is unchanged.`);
+    } catch (error) {
+      setRefreshMessage(`Refresh failed: ${error instanceof Error ? error.message : 'Unable to fetch scores'}`);
+    }
+  };
+  const rankedScores = useMemo(() => (dependencies?.scores ?? []).slice().sort(
+    (a, b) => b.score - a.score || a.service_name.localeCompare(b.service_name)
+  ), [dependencies?.scores]);
+  const availableServices = useMemo(() => Object.keys(dependencies?.graph?.nodes ?? {}).sort(), [dependencies?.graph?.nodes]);
+  const recommendation = rankedScores.find((score) => score.score > 0 && availableServices.includes(score.service_name));
+  const scoresByService = new Map(rankedScores.map((score) => [score.service_name, score]));
 
   const handleOpenModal = () => {
     setTargetURL('');
     setTargetService('');
     setFormError(null);
+    setRefreshMessage('');
     setShowModal(true);
   };
 
@@ -80,7 +94,7 @@ export const ExperimentsPage: React.FC = () => {
     }
   };
 
-  const effectiveTargetService = targetService || (availableServices.length > 0 ? availableServices[0] : '');
+  const effectiveTargetService = targetService || recommendation?.service_name || '';
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -204,16 +218,16 @@ export const ExperimentsPage: React.FC = () => {
       {/* Modal */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}>
-          <div className="w-full max-w-lg rounded-lg overflow-hidden" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
+          <div className="flex max-h-[90dvh] w-full max-w-lg flex-col rounded-lg overflow-hidden" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
             {/* Modal header */}
-            <div className="flex items-center justify-between px-5 py-3" style={{ borderBottom: '1px solid #30363d' }}>
+            <div className="flex shrink-0 items-center justify-between px-5 py-3" style={{ borderBottom: '1px solid #30363d' }}>
               <span className="text-sm font-semibold" style={{ color: '#e6edf3' }}>New Experiment</span>
               <button onClick={handleCloseModal} className="rounded p-1" style={{ color: '#8b949e' }}>
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            <form onSubmit={handleCreate} className="p-5 space-y-4">
+            <form onSubmit={handleCreate} className="overflow-y-auto p-5 space-y-4">
               {formError && (
                 <div className="rounded p-3 text-xs" style={{ backgroundColor: 'rgba(248,81,73,0.1)', border: '1px solid rgba(248,81,73,0.3)', color: '#f85149' }}>
                   {formError}
@@ -228,11 +242,15 @@ export const ExperimentsPage: React.FC = () => {
                 <input
                   className={inputCls}
                   style={inputStyle}
-                  placeholder="http://my-service:8080/api/endpoint"
+                  placeholder="http://frontend:8080/"
                   value={targetURL}
                   onChange={(e) => setTargetURL(e.target.value)}
                   required
                 />
+                <p className="mt-1 text-xs" style={{ color: '#8b949e' }}>
+                  Use a URL reachable by the control plane. For the Docker demo shop, use http://frontend:8080/.
+                  For a service running on your Mac, use host.docker.internal instead of localhost.
+                </p>
               </div>
 
               {/* Step 2: Service dropdown (from Jaeger) */}
@@ -241,28 +259,32 @@ export const ExperimentsPage: React.FC = () => {
                   <label className="text-[11px] font-semibold" style={{ color: '#8b949e' }}>
                     Target Service
                     <span className="ml-1.5 font-normal" style={{ color: '#6e7681' }}>
-                      — discovered from Jaeger traces
+                      — recommended by criticality score
                     </span>
                   </label>
                   <button
                     type="button"
-                    onClick={() => refetchServices()}
+                    onClick={refreshRecommendation}
+                    disabled={refreshingServices}
                     className="flex items-center gap-1 text-[10px]"
                     style={{ color: '#6e7681' }}
-                    title="Refresh service list"
+                    title="Refresh services and criticality scores"
                   >
-                    <RefreshCw className="h-3 w-3" />
-                    Refresh
+                    <RefreshCw className={`h-3 w-3 ${refreshingServices ? 'animate-spin' : ''}`} />
+                    {refreshingServices ? 'Refreshing…' : 'Refresh'}
                   </button>
                 </div>
 
+                {refreshMessage && <p role="status" className="mb-2 text-xs" style={{ color: '#8b949e' }}>{refreshMessage}</p>}
+                <p className="mb-2 text-xs" style={{ color: '#8b949e' }}>Ranking uses existing cluster traces from the last hour. The URL specifies where test traffic will be sent; the selected service specifies which telemetry to monitor.</p>
+                <p className="mb-2 text-xs" style={{ color: '#8b949e' }}>Traffic rates use the retrieved trace sample, which may cover only part of the traffic.</p>
                 {loadingServices ? (
                   <div
                     className="flex items-center gap-2 rounded px-3 py-2 text-xs"
                     style={{ backgroundColor: '#0d1117', border: '1px solid #30363d', color: '#6e7681' }}
                   >
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Querying Jaeger for active services…
+                    Calculating service criticality from Jaeger traces…
                   </div>
                 ) : servicesError ? (
                   <div className="space-y-2">
@@ -271,7 +293,7 @@ export const ExperimentsPage: React.FC = () => {
                       style={{ backgroundColor: 'rgba(248,81,73,0.08)', border: '1px solid rgba(248,81,73,0.25)', color: '#f85149' }}
                     >
                       <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                      Could not reach Jaeger — enter service name manually
+                      Could not calculate a recommendation — enter service name manually
                     </div>
                     <input
                       className={inputCls}
@@ -312,10 +334,27 @@ export const ExperimentsPage: React.FC = () => {
                     {effectiveTargetService && !availableServices.includes(effectiveTargetService) && (
                       <option value={effectiveTargetService}>{effectiveTargetService} (targeted)</option>
                     )}
-                    {availableServices.slice().sort().map((svc) => (
-                      <option key={svc} value={svc}>{svc}</option>
+                    {availableServices.slice().sort((a, b) => (scoresByService.get(b)?.score ?? 0) - (scoresByService.get(a)?.score ?? 0) || a.localeCompare(b)).map((svc) => (
+                      <option key={svc} value={svc}>
+                        {svc}{scoresByService.has(svc) ? ` — ${((scoresByService.get(svc)?.score ?? 0) * 100).toFixed(1)}%` : ''}{svc === recommendation?.service_name ? ' (recommended)' : ''}
+                      </option>
                     ))}
                   </select>
+                )}
+
+                {recommendation && !servicesError && (
+                  <div className="mt-2 rounded p-3 text-xs" style={{ backgroundColor: '#21262d', color: '#8b949e' }}>
+                    <p>Recommended: <strong style={{ color: '#f0883e' }}>{recommendation.service_name}</strong> ({(recommendation.score * 100).toFixed(1)}% criticality), the highest calculated score.</p>
+                    <ul className="mt-1 list-disc pl-4">
+                      {recommendation.reasons.map((reason, index) => <li key={index}>{reason}</li>)}
+                    </ul>
+                    {targetService && targetService !== recommendation.service_name ? (
+                      <p className="mt-2">Override selected. <button type="button" className="underline" onClick={() => setTargetService('')}>Use recommended service</button></p>
+                    ) : <p className="mt-2">Choose another service above to override the recommendation.</p>}
+                  </div>
+                )}
+                {!recommendation && !loadingServices && !servicesError && availableServices.length > 0 && (
+                  <p className="mt-2 text-xs" style={{ color: '#d29922' }}>No positive criticality scores are available yet. Generate traffic and refresh, or select a service manually.</p>
                 )}
 
                 {effectiveTargetService && !servicesError && availableServices.length > 0 && (
@@ -353,6 +392,13 @@ export const ExperimentsPage: React.FC = () => {
               </div>
 
               <div className="text-[10px] font-semibold uppercase tracking-widest pt-1" style={{ color: '#6e7681' }}>SLA Thresholds</div>
+              <div>
+                <label className="block text-[11px] mb-1" style={{ color: '#8b949e' }}>Step Duration (seconds)</label>
+                <input type="number" min="1" required className={inputCls} style={inputStyle}
+                  value={config.step_duration_seconds}
+                  onChange={(e) => setConfig({ ...config, step_duration_seconds: Number(e.target.value) })}
+                />
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] mb-1" style={{ color: '#8b949e' }}>Max P95 Latency (ms)</label>
@@ -365,7 +411,21 @@ export const ExperimentsPage: React.FC = () => {
                   <label className="block text-[11px] mb-1" style={{ color: '#8b949e' }}>Max Error Rate (%)</label>
                   <input type="number" step="0.1" min="0" max="100" className={inputCls} style={inputStyle}
                     value={config.max_error_rate_percent}
-                    onChange={(e) => setConfig({ ...config, max_error_rate_percent: parseFloat(e.target.value) || 1.0 })}
+                    onChange={(e) => setConfig({ ...config, max_error_rate_percent: Number(e.target.value) })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] mb-1" style={{ color: '#8b949e' }}>Minimum Availability (%)</label>
+                  <input type="number" min="0" max="100" step="0.1" required className={inputCls} style={inputStyle}
+                    value={config.min_availability_pct}
+                    onChange={(e) => setConfig({ ...config, min_availability_pct: Number(e.target.value) })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] mb-1" style={{ color: '#8b949e' }}>Recovery Window (seconds)</label>
+                  <input type="number" min="1" required className={inputCls} style={inputStyle}
+                    value={config.recovery_window_sec}
+                    onChange={(e) => setConfig({ ...config, recovery_window_sec: Number(e.target.value) })}
                   />
                 </div>
               </div>
@@ -381,7 +441,7 @@ export const ExperimentsPage: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting || !targetService || !targetURL}
+                  disabled={isSubmitting || !effectiveTargetService || !targetURL}
                   className="rounded px-4 py-1.5 text-xs font-semibold disabled:opacity-40"
                   style={{ backgroundColor: '#f0883e', color: '#0d1117' }}
                 >

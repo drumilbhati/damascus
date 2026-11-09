@@ -38,6 +38,7 @@ export interface MetricsChartProps {
   history?: MetricSnapshot[];
   /** Whether the experiment is actively running */
   isRunning?: boolean;
+  telemetryUnavailable?: boolean;
   /** Experiment configuration containing SLA thresholds and rate limits */
   config?: ExperimentConfig;
   /** Maximum number of data points to retain in the live sliding window buffer (default: 60) */
@@ -327,6 +328,7 @@ export const MetricsChart: React.FC<MetricsChartProps> = ({
   snapshot,
   history,
   isRunning = false,
+  telemetryUnavailable = false,
   config,
   maxBufferPoints = 60,
   className = '',
@@ -366,7 +368,9 @@ export const MetricsChart: React.FC<MetricsChartProps> = ({
           <h2 className="text-xs font-semibold uppercase tracking-wider" style={{ color: '#e6edf3' }}>
             Live Telemetry Metrics (Load vs P95 &amp; Errors)
           </h2>
-          {isRunning ? (
+          {telemetryUnavailable ? (
+            <span className="text-xs text-amber-400">Telemetry unavailable</span>
+          ) : isRunning ? (
             <span
               className="inline-flex items-center gap-1.5 rounded px-2 py-0.5 font-mono text-[10px] font-semibold"
               style={{ backgroundColor: 'rgba(63,185,80,0.12)', color: '#3fb950' }}
@@ -447,7 +451,7 @@ export const MetricsChart: React.FC<MetricsChartProps> = ({
         >
           <ShieldAlert className="h-6 w-6" style={{ color: '#30363d' }} />
           <span>No telemetry data points received yet.</span>
-          <span className="text-[11px]">Start the experiment to begin streaming live metrics.</span>
+          <span className="text-[11px]">{isRunning ? 'Waiting for service metrics. Check trace export and traffic reaching the selected service.' : 'Start the experiment to begin streaming live metrics.'}</span>
         </div>
       ) : (
         <div className="w-full">

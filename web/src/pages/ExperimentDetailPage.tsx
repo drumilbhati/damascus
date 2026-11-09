@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useExperiment, useExperimentStatus } from '../api/hooks';
 import { startExperiment, stopExperiment } from '../api/endpoints';
@@ -32,7 +32,14 @@ export const ExperimentDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const { data: experiment, error: expError, mutate: mutateExp, isLoading } = useExperiment(id);
   const isRunning = experiment?.state === 'RUNNING';
-  const { data: snapshot } = useExperimentStatus(id, isRunning);
+  const { data: latestSnapshot, error: telemetryError, mutate: refreshTelemetry } = useExperimentStatus(
+    experiment && experiment.state !== 'CREATED' ? id : null,
+    Boolean(experiment && ['PLANNED', 'RUNNING', 'STOPPING', 'ANALYZING', 'REPORTING'].includes(experiment.state))
+  );
+  useEffect(() => {
+    if (experiment?.state === 'COMPLETED' || experiment?.state === 'ABORTED') void refreshTelemetry();
+  }, [experiment?.state, refreshTelemetry]);
+  const snapshot = telemetryError ? undefined : latestSnapshot;
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [isActing, setIsActing] = useState(false);
@@ -164,12 +171,22 @@ export const ExperimentDetailPage: React.FC = () => {
       )}
 
       {/* Real-Time Telemetry */}
+      {/\:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(experiment.target_url) && (
+        <p role="alert" className="rounded border border-amber-700 p-3 text-xs text-amber-300">This experiment targets localhost. When the control plane runs in Docker, that address points to its own container. Create a new experiment with a reachable URL, such as http://frontend:8080/ for the demo shop.</p>
+      )}
+      {experiment.state === 'CREATED' ? (
+        <div className="rounded border border-slate-700 p-5 text-sm text-slate-300">
+          <p className="font-semibold">Ready to start</p>
+          <p className="mt-1">No traffic has been sent yet. Review the settings below, then click Start Traffic Injection. Measurements will appear after traffic starts and telemetry is collected.</p>
+        </div>
+      ) : (
+      <>
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>
             Real-Time Telemetry Stream
           </span>
-          {isRunning && (
+          {isRunning && snapshot && (
             <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold" style={{ color: '#3fb950' }}>
               <span className="relative flex h-1.5 w-1.5">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-75" style={{ backgroundColor: '#3fb950' }}></span>
@@ -180,12 +197,13 @@ export const ExperimentDetailPage: React.FC = () => {
           )}
         </div>
 
+        {telemetryError && <p role="alert" className="rounded border border-red-800 p-3 text-xs text-red-300">Telemetry unavailable: {telemetryError.message}</p>}
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {/* Throughput */}
           <div className="rounded p-4" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
             <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>Throughput (RPS)</div>
             <div className="mt-2 font-mono text-2xl font-bold" style={{ color: '#e6edf3' }}>
-              {snapshot?.request_rate ? `${snapshot.request_rate.toFixed(1)}` : '0.0'}
+              {snapshot ? snapshot.request_rate.toFixed(1) : '—'}
             </div>
             <div className="mt-0.5 font-mono text-[11px]" style={{ color: '#6e7681' }}>req/s</div>
           </div>
@@ -194,7 +212,7 @@ export const ExperimentDetailPage: React.FC = () => {
           <div className="rounded p-4" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
             <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>P95 Latency</div>
             <div className="mt-2 font-mono text-2xl font-bold" style={{ color: '#bc8cff' }}>
-              {snapshot?.p95_latency_ms ? `${snapshot.p95_latency_ms.toFixed(1)}` : '0.0'}
+              {snapshot ? snapshot.p95_latency_ms.toFixed(1) : '—'}
             </div>
             <div className="mt-0.5 font-mono text-[11px]" style={{ color: '#6e7681' }}>
               ms · SLA &lt;{experiment.config.max_p95_latency_ms}ms
@@ -205,7 +223,7 @@ export const ExperimentDetailPage: React.FC = () => {
           <div className="rounded p-4" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
             <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>Error Rate</div>
             <div className="mt-2 font-mono text-2xl font-bold" style={{ color: '#f85149' }}>
-              {snapshot?.error_rate !== undefined ? `${(snapshot.error_rate * 100).toFixed(2)}` : '0.00'}
+              {snapshot?.error_rate !== undefined ? `${(snapshot.error_rate * 100).toFixed(2)}` : '—'}
             </div>
             <div className="mt-0.5 font-mono text-[11px]" style={{ color: '#6e7681' }}>
               % · max {experiment.config.max_error_rate_percent}%
@@ -216,7 +234,7 @@ export const ExperimentDetailPage: React.FC = () => {
           <div className="rounded p-4" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
             <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>Availability</div>
             <div className="mt-2 font-mono text-2xl font-bold" style={{ color: '#3fb950' }}>
-              {snapshot?.availability !== undefined ? `${(snapshot.availability * 100).toFixed(2)}` : '100.00'}
+              {snapshot?.availability !== undefined ? `${(snapshot.availability * 100).toFixed(2)}` : '—'}
             </div>
             <div className="mt-0.5 font-mono text-[11px]" style={{ color: '#6e7681' }}>
               % · min {experiment.config.min_availability_pct}%
@@ -229,8 +247,11 @@ export const ExperimentDetailPage: React.FC = () => {
       <MetricsChart
         snapshot={snapshot}
         isRunning={isRunning}
+        telemetryUnavailable={Boolean(telemetryError) || (isRunning && !snapshot)}
         config={experiment.config}
       />
+      </>
+      )}
 
       {/* Config detail grids */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

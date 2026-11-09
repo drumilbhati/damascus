@@ -107,9 +107,9 @@ func (c *BaselineCalculator) CalculateRTOWithBaseline(observations []Observation
 	var postStressObs []Observation
 
 	for _, obs := range obsCopy {
-		if obs.LoadRate > 0 {
+		if obs.OfferedRate() > 0 {
 			foundStress = true
-		} else if foundStress && obs.LoadRate == 0 {
+		} else if foundStress && obs.OfferedRate() == 0 {
 			postStressObs = append(postStressObs, obs)
 		}
 	}
@@ -177,10 +177,10 @@ func (c *BaselineCalculator) CalculateRTO(observations []Observation) (*RTOResul
 	// Collect observations before stress load begins
 	var preStressObs []Observation
 	for _, obs := range obsCopy {
-		if obs.LoadRate > 0 {
+		if obs.OfferedRate() > 0 {
 			break
 		}
-		if obs.LoadRate == 0 {
+		if obs.OfferedRate() == 0 {
 			preStressObs = append(preStressObs, obs)
 		}
 	}

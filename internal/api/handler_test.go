@@ -536,6 +536,21 @@ func TestHandler_GetExperimentStatus(t *testing.T) {
 		CreatedAt:     time.Now(),
 	}
 
+	t.Run("missing telemetry returns unavailable", func(t *testing.T) {
+		repo := &mockExperimentRepository{
+			getByIDFn:         func(context.Context, string) (*experiment.Experiment, error) { return exp, nil },
+			getObservationsFn: func(context.Context, string) ([]capacity.Observation, error) { return nil, nil },
+		}
+		h := NewHandler(nil, repo, nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/experiments/exp-123/status", nil)
+		req.SetPathValue("id", "exp-123")
+		rec := httptest.NewRecorder()
+		h.GetExperimentStatus(rec, req)
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("expected 503 without measurements, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
 	t.Run("from SnapshotProvider", func(t *testing.T) {
 		provider := &mockSnapshotProvider{
 			getLatestSnapshotFn: func(ctx context.Context, expID string) (*watcher.MetricSnapshot, error) {

@@ -200,6 +200,12 @@ func run() error {
 		"max_idle_conns", storage.DefaultMaxIdleConns,
 	)
 
+	schemaCtx, schemaCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	schemaErr := storage.EnsureObservationSchema(schemaCtx, db)
+	schemaCancel()
+	if schemaErr != nil {
+		return fmt.Errorf("upgrade observation schema: %w", schemaErr)
+	}
 	repo := storage.NewPostgresExperimentRepository(db)
 
 	// 2. Initialize HTTP client with connection reuse
@@ -258,7 +264,7 @@ func run() error {
 		Addr:         ":" + cfg.Port,
 		Handler:      router,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		WriteTimeout: 75 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 

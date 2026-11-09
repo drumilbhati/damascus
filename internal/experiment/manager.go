@@ -95,7 +95,9 @@ func (m *Manager) Shutdown() {
 	m.mu.RLock()
 	cancels := make([]context.CancelFunc, 0, len(m.activeRuns))
 	for _, cancel := range m.activeRuns {
-		cancels = append(cancels, cancel)
+		if cancel != nil {
+			cancels = append(cancels, cancel)
+		}
 	}
 	m.mu.RUnlock()
 	for _, cancel := range cancels {
@@ -144,12 +146,34 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 		return fmt.Errorf("invalid load plan method %q: only GET and POST are supported", plan.Method)
 	}
 	plan.Method = method
+	// Reserve the shared engines before changing state or querying dependencies.
+	m.mu.Lock()
+	if len(m.activeRuns) != 0 {
+		m.mu.Unlock()
+		return fmt.Errorf("another experiment is already running")
+	}
+	if m.shutdownCtx.Err() != nil {
+		m.mu.Unlock()
+		return fmt.Errorf("manager is shutting down")
+	}
+	m.activeRuns[id] = nil
+	m.mu.Unlock()
+	reserved := true
+	defer func() {
+		if reserved {
+			m.removeActiveRun(id)
+		}
+	}()
 	exp, err := m.repo.GetByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("failed to retrieve experiment: %w", err)
 	}
 	if exp == nil {
 		return fmt.Errorf("experiment %s was not found", id)
+	}
+	if exp.Type == ExperimentStep {
+		plan.InitialRate = plan.MaxRate
+		plan.StepRate = 0
 	}
 	if exp.State != StateCreated {
 		return fmt.Errorf("experiment %s is not in StateCreated; current state: %s", id, exp.State)
@@ -185,12 +209,6 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 	stressCtx, cancelStress := context.WithCancel(expCtx)
 
 	m.mu.Lock()
-	if _, exists := m.activeRuns[id]; exists {
-		m.mu.Unlock()
-		cancelStress()
-		cancelExp()
-		return fmt.Errorf("experiment %s is already running", id)
-	}
 	m.activeRuns[id] = cancelStress
 	m.mu.Unlock()
 
@@ -217,9 +235,22 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 	}
 	var stopOnce sync.Once
 	handler := func(snapshot watcher.MetricSnapshot) {
+		if snapshot.TelemetryError != "" {
+			signalFailure(errors.New(snapshot.TelemetryError))
+			return
+		}
+		injectedRate := float64(plan.InitialRate)
+		if rateSource, ok := m.stressEngine.(interface{ CurrentRate() int }); ok {
+			injectedRate = float64(rateSource.CurrentRate())
+		}
+		if stressCtx.Err() != nil {
+			injectedRate = 0
+		}
+
 		observation := capacity.Observation{
 			Timestamp:    snapshot.Timestamp,
 			LoadRate:     snapshot.RequestRate,
+			InjectedRate: &injectedRate,
 			P95LatencyMs: snapshot.P95LatencyMs,
 			ErrorRate:    snapshot.ErrorRate,
 			Availability: snapshot.Availability,
@@ -238,15 +269,23 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 		}
 		decision := m.safetyController.Evaluate(expCtx, snapshot, policy)
 		if decision.ShouldStop {
-			stopOnce.Do(cancelStress)
+			stopOnce.Do(func() {
+				// Persist the reason before cancellation can begin finalization.
+				if err := m.transitionState(expCtx, id, StateStopping, decision.Reason); err != nil {
+					signalFailure(err)
+					return
+				}
+				cancelStress()
+			})
 		}
 	}
 	m.watcher.SetSnapshotHandler(handler)
-	go func() {
-		if err := m.watcher.Start(expCtx, id, exp.TargetService); err != nil {
-			signalFailure(fmt.Errorf("watcher failed: %w", err))
-		}
-	}()
+	if err := m.watcher.Start(expCtx, id, exp.TargetService); err != nil {
+		cancelStress()
+		cancelExp()
+		m.abortExperiment(context.Background(), id, err.Error())
+		return fmt.Errorf("watcher failed: %w", err)
+	}
 
 	stressDone := make(chan struct{})
 	go func() {
@@ -260,6 +299,7 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 		cancelStress()
 	}()
 
+	reserved = false
 	go m.finishExperiment(expCtx, cancelExp, stressDone, startErrs, *exp, scores)
 	return nil
 }
@@ -268,11 +308,11 @@ func (m *Manager) StopExperiment(ctx context.Context, id, reason string) error {
 	m.mu.Lock()
 	cancel, ok := m.activeRuns[id]
 	m.mu.Unlock()
-	if ok {
-		cancel()
+	if ok && cancel != nil {
 		if err := m.transitionState(ctx, id, StateStopping, reason); err != nil {
 			return fmt.Errorf("failed to stop experiment %s: %w", id, err)
 		}
+		cancel()
 		return nil
 	}
 
@@ -323,6 +363,9 @@ func (m *Manager) transitionState(ctx context.Context, id string, target Experim
 	}
 
 	if exp.State == target {
+		if reason != "" {
+			return m.repo.UpdateState(ctx, id, target, reason)
+		}
 		return nil
 	}
 
@@ -352,15 +395,16 @@ func (m *Manager) finishExperiment(
 	select {
 	case err := <-startErrs:
 		stopReason = err.Error()
+	case <-stressDone:
+	case <-expCtx.Done():
+	}
+	// Joining the engine makes a queued failure take precedence over normal completion.
+	m.stressEngine.Stop()
+	<-stressDone
+	select {
+	case err := <-startErrs:
+		stopReason = err.Error()
 	default:
-		select {
-		case err := <-startErrs:
-			stopReason = err.Error()
-		case <-stressDone:
-			// Traffic generation stopped normally or via cancellation.
-		case <-expCtx.Done():
-			// Context was cancelled.
-		}
 	}
 
 	workCtx := context.Background()
@@ -410,6 +454,12 @@ func (m *Manager) finishExperiment(
 
 	if m.watcher != nil {
 		m.watcher.Stop()
+	}
+	select {
+	case err := <-startErrs:
+		m.abortExperiment(workCtx, exp.ID, err.Error())
+		return
+	default:
 	}
 	if err := m.transitionState(workCtx, exp.ID, StateAnalyzing, ""); err != nil {
 		m.abortExperiment(workCtx, exp.ID, err.Error())

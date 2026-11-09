@@ -43,7 +43,7 @@ func (a *Analyzer) Analyze(observations []Observation, policy safety.SafetyPolic
 	// 1. Compute MaximumTestedRate
 	maxTestedRate := 0
 	for _, obs := range observations {
-		rate := int(math.Round(obs.LoadRate))
+		rate := int(math.Round(obs.OfferedRate()))
 		if rate > maxTestedRate {
 			maxTestedRate = rate
 		}
@@ -61,7 +61,7 @@ func (a *Analyzer) Analyze(observations []Observation, policy safety.SafetyPolic
 	tiersMap := make(map[int]*tierMetrics)
 
 	for _, obs := range observations {
-		rate := int(math.Round(obs.LoadRate))
+		rate := int(math.Round(obs.OfferedRate()))
 		if rate <= 0 {
 			continue
 		}
@@ -151,7 +151,7 @@ func isSlaBreached(obs Observation, policy safety.SafetyPolicy) bool {
 	if policy.MaxP95LatencyMs > 0 && obs.P95LatencyMs > policy.MaxP95LatencyMs {
 		return true
 	}
-	if policy.MaxErrorRate > 0 && obs.ErrorRate > policy.MaxErrorRate {
+	if policy.MaxErrorRate >= 0 && obs.ErrorRate > policy.MaxErrorRate {
 		return true
 	}
 	if policy.MinAvailability > 0 && obs.Availability < policy.MinAvailability {
@@ -168,7 +168,7 @@ func isTierCompliant(tier aggregatedTier, policy safety.SafetyPolicy) bool {
 	if policy.MaxP95LatencyMs > 0 && tier.avgP95Ms > policy.MaxP95LatencyMs {
 		return false
 	}
-	if policy.MaxErrorRate > 0 && tier.avgErrorRate > policy.MaxErrorRate {
+	if policy.MaxErrorRate >= 0 && tier.avgErrorRate > policy.MaxErrorRate {
 		return false
 	}
 	if policy.MinAvailability > 0 && tier.minAvail < policy.MinAvailability {
@@ -225,9 +225,9 @@ func calculateRecoveryTime(observations []Observation, policy safety.SafetyPolic
 	foundStress := false
 
 	for _, obs := range observations {
-		if obs.LoadRate > 0 {
+		if obs.OfferedRate() > 0 {
 			foundStress = true
-		} else if foundStress && obs.LoadRate == 0 {
+		} else if foundStress && obs.OfferedRate() == 0 {
 			zeroLoadObs = append(zeroLoadObs, obs)
 		}
 	}

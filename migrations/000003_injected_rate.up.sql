@@ -1,0 +1,1 @@
+ALTER TABLE observations ADD COLUMN IF NOT EXISTS injected_rate DOUBLE PRECISION;

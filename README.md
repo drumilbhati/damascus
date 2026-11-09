@@ -40,25 +40,27 @@
 
 ## 🚀 Quick Start: Launching the Target Playground
 
-DAMASCUS targets standard OpenTelemetry-instrumented environments. You can launch the full **OpenTelemetry Astronomy Shop Demo** along with its complete observability stack using the self-contained compose bundle in [`deployments/`](deployments/):
+DAMASCUS targets standard OpenTelemetry-instrumented environments. Launch the control plane, dashboard, **OpenTelemetry Astronomy Shop Demo**, and observability stack with the root Compose file:
 
 ```bash
-# Start target microservices, OTel Collector, Jaeger, and Prometheus
-docker compose -f deployments/docker-compose.otel-demo.yaml up -d
+cp .env.example .env
+docker compose up -d --build
 ```
 
 ### 🌐 Live Service & Observability Endpoints
 
 | Service | Local Endpoint | Description |
 | :--- | :--- | :--- |
-| 🔭 **Astronomy Web Shop** | [**`http://localhost:8080/`**](http://localhost:8080/) | Target e-commerce store with live product catalog and checkout flows. |
+| 🖥️ **DAMASCUS Dashboard** | [**`http://localhost:3000/`**](http://localhost:3000/) | Web dashboard. |
+| ⚙️ **DAMASCUS Control Plane** | [**`http://localhost:8080/api/health`**](http://localhost:8080/api/health) | REST API health endpoint. |
+| 🔭 **Astronomy Web Shop** | [**`http://localhost:8085/`**](http://localhost:8085/) | Target e-commerce store with live product catalog and checkout flows. |
 | 🔍 **Jaeger Traces UI & API** | [**`http://localhost:16686/`**](http://localhost:16686/) | Distributed trace trees and REST API (`/api/traces`, `/api/dependencies`). |
 | 📈 **Prometheus Metrics** | [**`http://localhost:9090/`**](http://localhost:9090/) | Time-series metrics engine and PromQL API (`/api/v1/query`). |
 
 To stop the target environment:
 
 ```bash
-docker compose -f deployments/docker-compose.otel-demo.yaml down
+docker compose down
 ```
 
 ---

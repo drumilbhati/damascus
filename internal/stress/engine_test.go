@@ -2,6 +2,7 @@ package stress_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -35,6 +36,7 @@ func TestEngine_StartAndContextCancellation(t *testing.T) {
 		TargetURL:   server.URL,
 		Method:      "GET",
 		InitialRate: 100, // 100 RPS
+		MaxRate:     100, StepDurationSeconds: 5,
 	}
 
 	errCh := make(chan error, 1)
@@ -88,6 +90,7 @@ func TestEngine_StopMethod(t *testing.T) {
 		Method:      "POST",
 		Payload:     `{"item_id":"123"}`,
 		InitialRate: 50,
+		MaxRate:     50, StepDurationSeconds: 5,
 	}
 
 	errCh := make(chan error, 1)
@@ -143,6 +146,7 @@ func TestEngine_PayloadAndHeadersReceived(t *testing.T) {
 		Method:      "POST",
 		Payload:     expectedPayload,
 		InitialRate: 50,
+		MaxRate:     50, StepDurationSeconds: 5,
 	}
 
 	go func() {
@@ -162,6 +166,43 @@ func TestEngine_PayloadAndHeadersReceived(t *testing.T) {
 	}
 
 	cancel()
+}
+
+func TestEngine_HTTPErrorsDoNotAbortExperiment(t *testing.T) {
+	// 4xx and 5xx responses are valid load-test observations measured by
+	// Prometheus/SafetyController. The engine must keep running rather than
+	// treating them as fatal and aborting the experiment mid-ramp.
+	for _, code := range []int{http.StatusNotFound, http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		code := code
+		t.Run(fmt.Sprintf("HTTP_%d", code), func(t *testing.T) {
+			var hitCount int64
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				atomic.AddInt64(&hitCount, 1)
+				w.WriteHeader(code)
+			}))
+			defer server.Close()
+
+			engine := stress.NewEngine(server.Client())
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+
+			plan := stress.LoadPlan{
+				TargetURL:           server.URL,
+				Method:              "GET",
+				InitialRate:         10,
+				MaxRate:             10,
+				StepDurationSeconds: 1,
+			}
+			// Engine must not return a non-context error because of HTTP error codes.
+			err := engine.Start(ctx, plan)
+			if err != nil && err != context.DeadlineExceeded && err != context.Canceled {
+				t.Errorf("HTTP %d response aborted experiment unexpectedly: %v", code, err)
+			}
+			if atomic.LoadInt64(&hitCount) == 0 {
+				t.Errorf("HTTP %d: expected requests to be sent, got 0", code)
+			}
+		})
+	}
 }
 
 func TestEngine_RateValidation(t *testing.T) {
@@ -200,6 +241,7 @@ func TestEngine_ConcurrentStartRejected(t *testing.T) {
 		TargetURL:   server.URL,
 		Method:      "GET",
 		InitialRate: 20,
+		MaxRate:     20, StepDurationSeconds: 5,
 	}
 
 	go func() {

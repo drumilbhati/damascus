@@ -1,5 +1,6 @@
 import useSWR from 'swr';
 import { defaultFetcher } from './client';
+import { fetchHealth, fetchDependencies } from './endpoints';
 import type {
   Experiment,
   MetricSnapshot,
@@ -10,16 +11,16 @@ import type {
 } from '../types';
 
 export const useHealth = (refreshInterval = 15000) => {
-  return useSWR<HealthStatus>('/health', defaultFetcher, {
+  return useSWR<HealthStatus>('/health', fetchHealth, {
     refreshInterval,
     revalidateOnFocus: true,
   });
 };
 
-export const useDependencies = (lookbackSeconds = 3600) => {
+export const useDependencies = (lookbackSeconds = 3600, enabled = true) => {
   return useSWR<DependenciesResponse>(
-    `/dependencies?lookback=${lookbackSeconds}`,
-    defaultFetcher,
+    enabled ? `/dependencies?lookback=${lookbackSeconds}` : null,
+    () => fetchDependencies(lookbackSeconds),
     {
       revalidateOnFocus: false,
     }
@@ -35,7 +36,8 @@ export const useExperiments = (refreshInterval = 5000) => {
 export const useExperiment = (id: string | null | undefined) => {
   return useSWR<Experiment>(
     id ? `/experiments/${id}` : null,
-    defaultFetcher
+    defaultFetcher,
+    { refreshInterval: 5000 }
   );
 };
 

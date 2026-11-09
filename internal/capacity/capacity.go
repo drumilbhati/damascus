@@ -6,6 +6,7 @@ import "time"
 type Observation struct {
 	Timestamp         time.Time `json:"timestamp"`
 	LoadRate          float64   `json:"load_rate"`
+	InjectedRate      *float64  `json:"injected_rate,omitempty"`
 	P95LatencyMs      float64   `json:"p95_latency_ms"`
 	ErrorRate         float64   `json:"error_rate"`
 	Availability      float64   `json:"availability"`
@@ -35,4 +36,13 @@ type ExperimentReport struct {
 	Observations           []Observation `json:"observations"`
 	Recommendations        []string      `json:"recommendations"`
 	GeneratedAt            time.Time     `json:"generated_at"`
+}
+
+// OfferedRate is the configured injection rate for new runs. Older observations
+// have no injection metadata and retain their historical interpretation.
+func (o Observation) OfferedRate() float64 {
+	if o.InjectedRate != nil {
+		return *o.InjectedRate
+	}
+	return o.LoadRate
 }

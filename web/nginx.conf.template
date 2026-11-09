@@ -18,6 +18,11 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
+    # The HTML names hashed assets; refresh it after each deployment.
+    location = /index.html {
+        add_header Cache-Control "no-cache, must-revalidate" always;
+    }
+
     # Proxy API requests to Damascus backend API
     location /api/ {
         proxy_pass ${BACKEND_URL};

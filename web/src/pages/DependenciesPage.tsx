@@ -21,7 +21,7 @@ export const DependenciesPage: React.FC = () => {
             Dependency Graph
           </h1>
           <p className="text-xs" style={{ color: '#8b949e' }}>
-            Service topology mapped from Jaeger traces with blast-radius scoring
+            Services registered in Jaeger, with links observed in traces during the selected window
           </p>
         </div>
 
@@ -233,7 +233,7 @@ export const DependenciesPage: React.FC = () => {
                 >
                   {edges.length === 0 ? (
                     <div className="flex h-32 items-center justify-center text-xs" style={{ color: '#6e7681' }}>
-                      No trace spans detected in lookback window
+                      No cross-service calls observed in this window. Check traffic generation and trace export if services are missing.
                     </div>
                   ) : (
                     <div className="overflow-x-auto">

@@ -4,6 +4,7 @@ import "time"
 
 // MetricSnapshot captures a real-time observation slice from Prometheus.
 type MetricSnapshot struct {
+	TelemetryError    string    `json:"telemetry_error,omitempty"`
 	ExperimentID      string    `json:"experiment_id"`
 	TargetService     string    `json:"target_service"`
 	Timestamp         time.Time `json:"timestamp"`

@@ -11,12 +11,17 @@ import type {
 } from '../types';
 
 export const fetchHealth = async (): Promise<HealthStatus> => {
-  const res = await apiClient.get<HealthStatus>('/health');
+  // A degraded stack still returns a useful health document with HTTP 503.
+  const res = await apiClient.get<HealthStatus>('/health', {
+    // The backend probes three components sequentially, up to five seconds each.
+    timeout: 20000,
+    validateStatus: (status) => status === 200 || status === 503,
+  });
   return res.data;
 };
 
 export const fetchDependencies = async (lookbackSeconds = 3600): Promise<DependenciesResponse> => {
-  const res = await apiClient.get<DependenciesResponse>(`/dependencies?lookback=${lookbackSeconds}`);
+  const res = await apiClient.get<DependenciesResponse>(`/dependencies?lookback=${lookbackSeconds}`, { timeout: 60000 });
   return res.data;
 };
 
@@ -46,7 +51,7 @@ export const createExperiment = async (payload: CreateExperimentPayload): Promis
 };
 
 export const startExperiment = async (id: string, payload?: StartExperimentPayload): Promise<{ status: string }> => {
-  const res = await apiClient.post<{ status: string }>(`/experiments/${id}/start`, payload || {});
+  const res = await apiClient.post<{ status: string }>(`/experiments/${id}/start`, payload || {}, { timeout: 60000 });
   return res.data;
 };
 

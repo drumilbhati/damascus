@@ -99,7 +99,7 @@ func (c *Controller) Evaluate(ctx context.Context, snapshot watcher.MetricSnapsh
 	}
 
 	// 2. Check Error Rate Breach
-	if policy.MaxErrorRate > 0 && snapshot.ErrorRate > policy.MaxErrorRate {
+	if policy.MaxErrorRate >= 0 && snapshot.ErrorRate > policy.MaxErrorRate {
 		reason := FormatErrorRateBreach(snapshot.ErrorRate, policy.MaxErrorRate)
 		c.logAndRecord(snapshot, MetricErrorRate, snapshot.ErrorRate, policy.MaxErrorRate, reason, true)
 		return SafetyDecision{
