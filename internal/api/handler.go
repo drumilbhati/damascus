@@ -511,6 +511,7 @@ func (h *Handler) GetExperimentStatus(w http.ResponseWriter, r *http.Request) {
 				TargetService:     exp.TargetService,
 				Timestamp:         latest.Timestamp,
 				RequestRate:       latest.LoadRate,
+				OfferedRate:       latest.InjectedRate,
 				P95LatencyMs:      latest.P95LatencyMs,
 				ErrorRate:         latest.ErrorRate,
 				Availability:      latest.Availability,
@@ -592,6 +593,12 @@ func (h *Handler) GetExperimentReport(w http.ResponseWriter, r *http.Request) {
 	}
 	if report == nil {
 		h.writeError(w, http.StatusNotFound, fmt.Sprintf("report for experiment %s was not found", id))
+		return
+	}
+
+	report, err = defaultReportEngine.Recalculate(*exp, report)
+	if err != nil {
+		h.handleServiceError(w, err, "recalculate_report")
 		return
 	}
 

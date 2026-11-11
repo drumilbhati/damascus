@@ -45,6 +45,7 @@ services:
       - JAEGER_URL=${JAEGER_URL}
       - KAFKA_BROKERS=${KAFKA_BROKERS}
       - TARGET_BASE_URL=${TARGET_BASE_URL}
+      - STRESS_MAX_IN_FLIGHT=${STRESS_MAX_IN_FLIGHT:-2048}
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 ${PORT} || exit 1"]
       interval: 5s

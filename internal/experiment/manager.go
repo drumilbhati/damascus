@@ -171,10 +171,6 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 	if exp == nil {
 		return fmt.Errorf("experiment %s was not found", id)
 	}
-	if exp.Type == ExperimentStep {
-		plan.InitialRate = plan.MaxRate
-		plan.StepRate = 0
-	}
 	if exp.State != StateCreated {
 		return fmt.Errorf("experiment %s is not in StateCreated; current state: %s", id, exp.State)
 	}
@@ -291,6 +287,14 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 	go func() {
 		defer close(stressDone)
 		if err := m.stressEngine.Start(stressCtx, plan); err != nil {
+			if errors.Is(err, stress.ErrInFlightLimit) {
+				if stateErr := m.transitionState(expCtx, id, StateStopping, err.Error()); stateErr != nil {
+					signalFailure(stateErr)
+				} else {
+					cancelStress()
+				}
+				return
+			}
 			if !errors.Is(err, context.Canceled) {
 				signalFailure(fmt.Errorf("stress engine failed: %w", err))
 			}

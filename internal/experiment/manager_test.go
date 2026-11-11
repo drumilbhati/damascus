@@ -107,6 +107,51 @@ type mockStressEngine struct {
 	startCalled  bool
 	stopCalled   bool
 	startBlockCh chan struct{}
+	startedPlan  stress.LoadPlan
+}
+
+type saturatedStressEngine struct{ *mockStressEngine }
+
+func (e *saturatedStressEngine) Start(context.Context, stress.LoadPlan) error {
+	return stress.ErrInFlightLimit
+}
+
+func TestGeneratorSaturationCompletesWithReport(t *testing.T) {
+	repo := newMockRepo()
+	engine := &saturatedStressEngine{newMockStressEngine()}
+	mgr := experiment.NewManager(nil, engine, newMockWatcher(), &mockSafetyController{}, &mockCapacityAnalyzer{}, &mockReportEngine{}, repo)
+	t.Cleanup(mgr.Shutdown)
+	exp, err := mgr.CreateExperiment(context.Background(), "frontend", "http://frontend:8080/api/products", experiment.ExperimentStep, experiment.ExperimentConfig{
+		InitialRate: 100, StepRate: 100, MaxRate: 2400, StepDurationSeconds: 5,
+		MaxP95LatencyMs: 100, MaxErrorRatePercent: 10, MinAvailabilityPct: 95,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.StartExperiment(context.Background(), exp.ID, stress.LoadPlan{TargetURL: exp.TargetURL, Method: "GET", InitialRate: 100, StepRate: 100, MaxRate: 2400, StepDurationSeconds: 5}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(3 * time.Second)
+	for {
+		got, err := repo.GetByID(context.Background(), exp.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.State == experiment.StateCompleted {
+			if got.StopReason == "" {
+				t.Fatal("missing generator saturation reason")
+			}
+			if repo.report == nil {
+				t.Fatal("missing report")
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("experiment did not complete: %+v", got)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 func newMockStressEngine() *mockStressEngine {
@@ -115,9 +160,45 @@ func newMockStressEngine() *mockStressEngine {
 	}
 }
 
+func TestStepExperimentStartsAtConfiguredInitialRate(t *testing.T) {
+	repo := newMockRepo()
+	engine := newMockStressEngine()
+	mgr := experiment.NewManager(nil, engine, newMockWatcher(), &mockSafetyController{}, &mockCapacityAnalyzer{}, &mockReportEngine{}, repo)
+	exp, err := mgr.CreateExperiment(context.Background(), "frontend", "http://frontend:8080", experiment.ExperimentStep, experiment.ExperimentConfig{
+		InitialRate: 100, StepRate: 100, MaxRate: 3000, StepDurationSeconds: 10,
+		MaxP95LatencyMs: 100, MaxErrorRatePercent: 10, MinAvailabilityPct: 95,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := stress.LoadPlan{TargetURL: exp.TargetURL, Method: "GET", InitialRate: 100, StepRate: 100, MaxRate: 3000, StepDurationSeconds: 10}
+	if err := mgr.StartExperiment(context.Background(), exp.ID, plan); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(mgr.Shutdown)
+	deadline := time.After(time.Second)
+	for {
+		engine.mu.Lock()
+		started, got := engine.startCalled, engine.startedPlan
+		engine.mu.Unlock()
+		if started {
+			if got.InitialRate != 100 || got.StepRate != 100 || got.MaxRate != 3000 {
+				t.Fatalf("step plan changed: %+v", got)
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("stress engine did not start")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 func (m *mockStressEngine) Start(ctx context.Context, plan stress.LoadPlan) error {
 	m.mu.Lock()
 	m.startCalled = true
+	m.startedPlan = plan
 	m.mu.Unlock()
 
 	select {

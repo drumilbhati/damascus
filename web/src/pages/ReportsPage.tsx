@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useExperiments, useExperimentReport } from '../api/hooks';
 import { ReportView } from '../components/ReportView';
 import {
@@ -9,9 +9,10 @@ export const ReportsPage: React.FC = () => {
   const { data: experiments } = useExperiments();
   const completedExperiments = experiments?.filter((e) => e.state === 'COMPLETED') || [];
   const [selectedExpId, setSelectedExpId] = useState<string | null>(
-    completedExperiments[0]?.id || null
+    new URLSearchParams(window.location.search).get('experiment') || null
   );
 
+  useEffect(() => { if (!selectedExpId && experiments) setSelectedExpId(experiments.find(e => e.state === 'COMPLETED')?.id ?? null); }, [experiments, selectedExpId]);
   const { data: report, isLoading, error } = useExperimentReport(selectedExpId);
 
   return (
@@ -22,7 +23,7 @@ export const ReportsPage: React.FC = () => {
           Capacity Analysis Reports
         </h1>
         <p className="text-xs" style={{ color: '#8b949e' }}>
-          Deterministic evaluations of sustainable throughput limits, degradation knees, and recovery speeds
+          Measured service traffic, SLA observations, and evidence-based capacity estimates
         </p>
       </div>
 

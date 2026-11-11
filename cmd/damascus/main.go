@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -213,7 +214,15 @@ func run() error {
 
 	// 3. Instantiate domain engines
 	graphAnalyzer := graph.NewAnalyzer(cfg.JaegerURL, httpClient)
-	stressEngine := stress.NewEngine(httpClient)
+	maxInFlight := 256
+	if raw := strings.TrimSpace(os.Getenv("STRESS_MAX_IN_FLIGHT")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 100000 {
+			return fmt.Errorf("STRESS_MAX_IN_FLIGHT must be an integer between 1 and 100000")
+		}
+		maxInFlight = parsed
+	}
+	stressEngine := stress.NewEngine(httpClient, stress.WithMaxInFlight(maxInFlight))
 
 	var watcherEngine experiment.Watcher
 	promClient, promErr := watcher.NewPrometheusClient(cfg.PrometheusURL)

@@ -370,7 +370,7 @@ export const ExperimentsPage: React.FC = () => {
                 <label className="block text-[11px] font-semibold mb-1" style={{ color: '#8b949e' }}>Strategy</label>
                 <select className={inputCls} style={inputStyle} value={expType} onChange={(e) => setExpType(e.target.value as ExperimentType)}>
                   <option value="ramp">ramp — linearly increase load step by step</option>
-                  <option value="step">step — jump to fixed load levels</option>
+                  <option value="step">step — increase load at each configured interval</option>
                 </select>
               </div>
 

@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { useExperiment, useExperimentStatus } from '../api/hooks';
+import { useExperiment, useExperimentStatus, useExperimentReport } from '../api/hooks';
 import { startExperiment, stopExperiment } from '../api/endpoints';
 import { MetricsChart } from '../components/MetricsChart';
 import {
@@ -31,6 +31,8 @@ function StateBadge({ state }: { state: string }) {
 export const ExperimentDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const { data: experiment, error: expError, mutate: mutateExp, isLoading } = useExperiment(id);
+  const { data: report } = useExperimentReport(experiment?.state === 'COMPLETED' ? id : null);
+  const history = useMemo(() => report?.observations.filter(o => !o.telemetry_missing).map(o => ({ ...o, experiment_id: report.experiment_id, target_service: report.target_service, request_rate: o.load_rate, offered_rate: o.injected_rate ?? undefined, p50_latency_ms: 0, p99_latency_ms: 0, cpu_utilization: o.cpu_utilization ?? 0, memory_utilization: o.memory_utilization ?? 0 })), [report]);
   const isRunning = experiment?.state === 'RUNNING';
   const { data: latestSnapshot, error: telemetryError, mutate: refreshTelemetry } = useExperimentStatus(
     experiment && experiment.state !== 'CREATED' ? id : null,
@@ -150,7 +152,7 @@ export const ExperimentDetailPage: React.FC = () => {
 
           {experiment.state === 'COMPLETED' && (
             <Link
-              to="/reports"
+              to={`/reports?experiment=${id}`}
               className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-semibold"
               style={{ backgroundColor: 'rgba(88,166,255,0.12)', color: '#58a6ff', border: '1px solid rgba(88,166,255,0.3)' }}
             >
@@ -184,7 +186,7 @@ export const ExperimentDetailPage: React.FC = () => {
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>
-            Real-Time Telemetry Stream
+            Latest recorded service sample
           </span>
           {isRunning && snapshot && (
             <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold" style={{ color: '#3fb950' }}>
@@ -192,7 +194,7 @@ export const ExperimentDetailPage: React.FC = () => {
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-75" style={{ backgroundColor: '#3fb950' }}></span>
                 <span className="relative inline-flex h-1.5 w-1.5 rounded-full" style={{ backgroundColor: '#3fb950' }}></span>
               </span>
-              Live · 1s polling
+              Live · 5s metric polling
             </span>
           )}
         </div>
@@ -201,11 +203,11 @@ export const ExperimentDetailPage: React.FC = () => {
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           {/* Throughput */}
           <div className="rounded p-4" style={{ backgroundColor: '#161b22', border: '1px solid #30363d' }}>
-            <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>Throughput (RPS)</div>
+            <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>Measured service traffic (RPS)</div>
             <div className="mt-2 font-mono text-2xl font-bold" style={{ color: '#e6edf3' }}>
               {snapshot ? snapshot.request_rate.toFixed(1) : '—'}
             </div>
-            <div className="mt-0.5 font-mono text-[11px]" style={{ color: '#6e7681' }}>req/s</div>
+            <div className="mt-0.5 font-mono text-[11px]" style={{ color: '#6e7681' }}>req/s · Offered target: {snapshot?.offered_rate == null ? 'Unavailable' : `${snapshot.offered_rate} req/s`}</div>
           </div>
 
           {/* P95 Latency */}
@@ -245,6 +247,8 @@ export const ExperimentDetailPage: React.FC = () => {
 
       {/* Live Telemetry Streaming Chart */}
       <MetricsChart
+        key={id}
+        history={history}
         snapshot={snapshot}
         isRunning={isRunning}
         telemetryUnavailable={Boolean(telemetryError) || (isRunning && !snapshot)}

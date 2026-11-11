@@ -9,6 +9,7 @@ type MetricSnapshot struct {
 	TargetService     string    `json:"target_service"`
 	Timestamp         time.Time `json:"timestamp"`
 	RequestRate       float64   `json:"request_rate"`
+	OfferedRate       *float64  `json:"offered_rate,omitempty"`
 	P50LatencyMs      float64   `json:"p50_latency_ms"`
 	P95LatencyMs      float64   `json:"p95_latency_ms"`
 	P99LatencyMs      float64   `json:"p99_latency_ms"`

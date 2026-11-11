@@ -2,6 +2,7 @@ package stress
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,20 +12,39 @@ import (
 	"time"
 )
 
+// ErrInFlightLimit means the generator cannot sustain the offered rate.
+// The experiment can still analyze measurements collected before this point.
+var ErrInFlightLimit = errors.New("load generator reached its in-flight request limit")
+
 // Engine executes one finite load plan at a time.
 type Engine struct {
-	client *http.Client
-	mu     sync.Mutex
-	cancel context.CancelFunc
-	done   chan struct{}
-	rate   atomic.Int64
+	client      *http.Client
+	maxInFlight int
+	mu          sync.Mutex
+	cancel      context.CancelFunc
+	done        chan struct{}
+	rate        atomic.Int64
 }
 
-func NewEngine(client *http.Client) *Engine {
+type EngineOption func(*Engine)
+
+func WithMaxInFlight(limit int) EngineOption {
+	return func(e *Engine) {
+		if limit > 0 {
+			e.maxInFlight = limit
+		}
+	}
+}
+
+func NewEngine(client *http.Client, opts ...EngineOption) *Engine {
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
 	}
-	return &Engine{client: client}
+	e := &Engine{client: client, maxInFlight: 256}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
 // CurrentRate is the offered load for the current step, independent of service traffic.
@@ -49,7 +69,7 @@ func (e *Engine) Start(ctx context.Context, plan LoadPlan) error {
 	var workers sync.WaitGroup
 	failures := make(chan error, 1)
 	// Bound work in flight so slow endpoints cannot exhaust the generator.
-	slots := make(chan struct{}, 256)
+	slots := make(chan struct{}, e.maxInFlight)
 	defer func() {
 		cancel()
 		workers.Wait()
@@ -89,7 +109,7 @@ func (e *Engine) Start(ctx context.Context, plan LoadPlan) error {
 						}
 					}()
 				default:
-					fail(fmt.Errorf("load generator reached its in-flight request limit"))
+					fail(fmt.Errorf("%w (%d) at %d RPS", ErrInFlightLimit, e.maxInFlight, rate))
 				}
 			}
 		}

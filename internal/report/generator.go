@@ -14,6 +14,7 @@ import (
 	"damascus/internal/capacity"
 	"damascus/internal/experiment"
 	"damascus/internal/graph"
+	"damascus/internal/safety"
 )
 
 // Sentinel errors for report generation and rendering validation.
@@ -105,6 +106,9 @@ func (g *Generator) Generate(
 		return nil, ErrEmptyExperimentID
 	}
 
+	policy := safety.SafetyPolicy{MaxP95LatencyMs: exp.Config.MaxP95LatencyMs, MaxErrorRate: exp.Config.MaxErrorRatePercent / 100, MinAvailability: exp.Config.MinAvailabilityPct / 100}
+	capResult = capacity.NewAnalyzer().Analyze(observations, policy)
+
 	// Match target service criticality score
 	var critScore float64
 	var matchedScore *graph.ServiceScore
@@ -125,18 +129,29 @@ func (g *Generator) Generate(
 		obsCopy = []capacity.Observation{}
 	}
 
+	sort.SliceStable(obsCopy, func(i, j int) bool { return obsCopy[i].Timestamp.Before(obsCopy[j].Timestamp) })
+	for i := range obsCopy {
+		obsCopy[i].Phase = capacity.Phase(obsCopy[i])
+		obsCopy[i].SLAStatus = capacity.SLAStatus(obsCopy[i], policy)
+	}
+
 	// Generate actionable engineering recommendations
 	recommendations := generateRecommendations(exp, capResult, matchedScore, obsCopy)
 
 	report := &capacity.ExperimentReport{
+		Measurements:           capResult.Measurements,
+		StopReason:             exp.StopReason,
 		ExperimentID:           exp.ID,
 		TargetService:          exp.TargetService,
 		CriticalityScore:       critScore,
 		MaximumTestedRate:      capResult.MaximumTestedRate,
+		PeakMeasuredRate:       capResult.PeakMeasuredRate,
 		MaximumSustainableRate: capResult.MaximumSustainableRate,
 		DegradationRate:        capResult.DegradationRate,
 		SafetyBoundaryRate:     capResult.SafetyBoundaryRate,
 		RecoveryTimeSec:        capResult.RecoveryTimeSec,
+		ObservedBreach:         capResult.ObservedBreach,
+		ObservedRecovery:       capResult.ObservedRecovery,
 		Observations:           obsCopy,
 		Recommendations:        recommendations,
 		GeneratedAt:            time.Now().UTC(),
@@ -315,36 +330,17 @@ func generateRecommendations(
 		}
 	}
 
-	// 2. Sustainable load limits & throughput capacity
-	if capResult.MaximumSustainableRate == 0 && capResult.MaximumTestedRate > 0 {
-		addRec(fmt.Sprintf("Service failed to sustain initial tested traffic (%d RPS) without breaching SLA limits. Immediate performance bottleneck profiling and vertical/horizontal scaling required.", capResult.MaximumTestedRate))
-	} else if capResult.MaximumTestedRate > 0 && capResult.MaximumSustainableRate < capResult.MaximumTestedRate {
-		addRec(fmt.Sprintf("Maximum sustainable throughput (%d RPS) is below peak tested load (%d RPS). Configure ingress load shedding or Horizontal Pod Autoscaling (HPA) above %d RPS.", capResult.MaximumSustainableRate, capResult.MaximumTestedRate, capResult.MaximumSustainableRate))
-	} else if exp.Config.MaxRate > 0 && capResult.MaximumSustainableRate < exp.Config.MaxRate {
-		addRec(fmt.Sprintf("Maximum sustainable throughput (%d RPS) fell short of planned ceiling (%d RPS). Scale service replicas to meet target capacity.", capResult.MaximumSustainableRate, exp.Config.MaxRate))
+	m := capResult.Measurements
+	addRec(m.CapacityReason)
+	addRec("Measured service traffic includes background requests and uses a trailing 30-second window; offered load is the generator target, not a measured request count.")
+	if m.BreachStatus == "observed" {
+		addRec("An SLA breach was observed. Inspect the timestamped samples for the breached metric; a completed experiment does not imply every SLA passed.")
 	}
-
-	// 3. Degradation knee curve analysis
-	if capResult.DegradationRate > 0 {
-		warningThreshold := int(float64(capResult.DegradationRate) * 0.85)
-		if warningThreshold < 1 {
-			warningThreshold = capResult.DegradationRate
-		}
-		addRec(fmt.Sprintf("Performance degradation knee detected at %d RPS (latency slope surged >50%%). Set proactive early-warning alerts and autoscaling triggers at %d RPS.", capResult.DegradationRate, warningThreshold))
+	if m.RecoveryStatus == "not_recovered" {
+		addRec("Recovery was not observed before monitoring ended. The observation-window length is not a recovery duration.")
 	}
-
-	// 4. Hard safety boundary breaches
-	if capResult.SafetyBoundaryRate > 0 && capResult.SafetyBoundaryRate < capResult.MaximumTestedRate {
-		addRec(fmt.Sprintf("Hard SLA safety boundary breached at %d RPS. Ensure ingress admission control drops non-essential traffic prior to reaching this threshold.", capResult.SafetyBoundaryRate))
-	}
-
-	// 5. Recovery Time Objective (RTO)
-	if capResult.RecoveryTimeSec > 0 {
-		if exp.Config.RecoveryWindowSec > 0 && capResult.RecoveryTimeSec > exp.Config.RecoveryWindowSec {
-			addRec(fmt.Sprintf("Post-stress recovery time (%ds) exceeded configured recovery window (%ds). Optimize connection pool draining and GC reclamation to accelerate recovery.", capResult.RecoveryTimeSec, exp.Config.RecoveryWindowSec))
-		} else {
-			addRec(fmt.Sprintf("Post-stress recovery stabilized in %ds. Telemetry returned to normal baseline SLA.", capResult.RecoveryTimeSec))
-		}
+	if exp.StopReason != "" {
+		addRec("Experiment stopped: " + exp.StopReason)
 	}
 
 	// 6. Observations metrics inspection (peak error rate, peak latency, peak CPU, peak memory)
@@ -399,196 +395,57 @@ type degradationPoint struct {
 
 // renderDegradationCurveSVG builds an inline SVG diagram displaying load rate vs P95 latency.
 func renderDegradationCurveSVG(report *capacity.ExperimentReport) template.HTML {
-	// Aggregate active observations by integer load rate
-	type tierAgg struct {
-		totalP95   float64
-		totalError float64
-		count      int
+	if len(report.Observations) == 0 {
+		return template.HTML(`<p>No observations available.</p>`)
 	}
-	tiersMap := make(map[int]*tierAgg)
-
-	for _, obs := range report.Observations {
-		rate := int(math.Round(obs.OfferedRate()))
-		if rate <= 0 {
+	var b strings.Builder
+	maxRate := 1.0
+	for _, o := range report.Observations {
+		if !capacity.ValidObservation(o) {
 			continue
 		}
-		agg, exists := tiersMap[rate]
-		if !exists {
-			agg = &tierAgg{}
-			tiersMap[rate] = agg
-		}
-		agg.totalP95 += obs.P95LatencyMs
-		agg.totalError += obs.ErrorRate
-		agg.count++
-	}
-
-	// If no active load tiers exist, render clean fallback SVG
-	if len(tiersMap) == 0 {
-		fallback := `<svg viewBox="0 0 800 160" width="100%" height="160" xmlns="http://www.w3.org/2000/svg">
-  <rect width="800" height="160" fill="#f8fafc" rx="8" stroke="#e2e8f0"/>
-  <text x="400" y="85" text-anchor="middle" fill="#94a3b8" font-size="14" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif">
-    No active stress observation telemetry recorded to plot degradation curve
-  </text>
-</svg>`
-		return template.HTML(fallback)
-	}
-
-	var rates []int
-	for r := range tiersMap {
-		rates = append(rates, r)
-	}
-	sort.Ints(rates)
-
-	var points []degradationPoint
-	maxRate := report.MaximumTestedRate
-	var maxP95 float64
-
-	for _, r := range rates {
-		agg := tiersMap[r]
-		avgP95 := agg.totalP95 / float64(agg.count)
-		avgErr := agg.totalError / float64(agg.count)
-		points = append(points, degradationPoint{
-			loadRate: r,
-			avgP95Ms: avgP95,
-			avgError: avgErr,
-		})
-		if r > maxRate {
-			maxRate = r
-		}
-		if avgP95 > maxP95 {
-			maxP95 = avgP95
+		maxRate = math.Max(maxRate, o.LoadRate)
+		if o.InjectedRate != nil {
+			maxRate = math.Max(maxRate, *o.InjectedRate)
 		}
 	}
-
-	if maxRate <= 0 {
-		maxRate = 100
+	b.WriteString(`<svg viewBox="0 0 900 280" role="img" aria-label="Measured service traffic and offered load over time" xmlns="http://www.w3.org/2000/svg"><path d="M60 20V230H880" stroke="#94a3b8" fill="none"/>`)
+	start := report.Observations[0].Timestamp
+	duration := report.Observations[len(report.Observations)-1].Timestamp.Sub(start).Seconds()
+	if duration <= 0 {
+		duration = 1
 	}
-	if maxP95 <= 0 {
-		maxP95 = 50.0
-	}
-	// Headroom for Y-axis (20% higher than max latency)
-	yMax := maxP95 * 1.20
-
-	// SVG layout geometry
-	svgW := 800.0
-	svgH := 320.0
-	padL := 75.0
-	padR := 50.0
-	padT := 45.0
-	padB := 50.0
-	plotW := svgW - padL - padR
-	plotH := svgH - padT - padB
-
-	mapX := func(rate int) float64 {
-		return padL + (float64(rate)/float64(maxRate))*plotW
-	}
-	mapY := func(p95 float64) float64 {
-		val := padT + plotH - (p95/yMax)*plotH
-		if val < padT {
-			return padT
+	for series := 0; series < 2; series++ {
+		color := "#16a34a"
+		if series == 1 {
+			color = "#2563eb"
 		}
-		if val > padT+plotH {
-			return padT + plotH
+		var points []string
+		flush := func() {
+			if len(points) > 0 {
+				fmt.Fprintf(&b, `<polyline points="%s" stroke="%s" fill="none" stroke-width="2"/>`, strings.Join(points, " "), color)
+				points = nil
+			}
 		}
-		return val
+		for _, o := range report.Observations {
+			if !capacity.ValidObservation(o) || (series == 1 && o.InjectedRate == nil) {
+				flush()
+				continue
+			}
+			rate := o.LoadRate
+			if series == 1 {
+				rate = *o.InjectedRate
+			}
+			x, y := 60+820*o.Timestamp.Sub(start).Seconds()/duration, 230-200*rate/maxRate
+			points = append(points, fmt.Sprintf("%.2f,%.2f", x, y))
+			fmt.Fprintf(&b, `<circle cx="%.2f" cy="%.2f" r="2" fill="%s"><title>%s: %.2f RPS</title></circle>`, x, y, color, o.Timestamp.UTC().Format("15:04:05"), rate)
+		}
+		flush()
 	}
-
-	var buf bytes.Buffer
-	fmt.Fprintf(&buf, "<svg viewBox=\"0 0 %.0f %.0f\" width=\"100%%\" height=\"auto\" xmlns=\"http://www.w3.org/2000/svg\" style=\"max-height: 360px;\">\n", svgW, svgH)
-
-	// Defs: Gradients and shadows
-	buf.WriteString(`  <defs>
-    <linearGradient id="curveGradient" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#4f46e5" stop-opacity="0.25"/>
-      <stop offset="100%" stop-color="#4f46e5" stop-opacity="0.0"/>
-    </linearGradient>
-  </defs>` + "\n")
-
-	// Background
-	fmt.Fprintf(&buf, "  <rect width=\"%.0f\" height=\"%.0f\" fill=\"#ffffff\" rx=\"10\"/>\n", svgW, svgH)
-
-	// Y-axis horizontal grid lines (4 levels)
-	gridLevels := 4
-	for i := 0; i <= gridLevels; i++ {
-		ratio := float64(i) / float64(gridLevels)
-		yVal := padT + plotH - (ratio * plotH)
-		latVal := ratio * yMax
-		fmt.Fprintf(&buf, "  <line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#e2e8f0\" stroke-width=\"1\" stroke-dasharray=\"3,3\"/>\n", padL, yVal, padL+plotW, yVal)
-		fmt.Fprintf(&buf, "  <text x=\"%.1f\" y=\"%.1f\" text-anchor=\"end\" fill=\"#64748b\" font-size=\"11\" font-family=\"system-ui, sans-serif\">%.0fms</text>\n", padL-10, yVal+4, latVal)
-	}
-
-	// X-axis baseline and tick labels
-	fmt.Fprintf(&buf, "  <line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#cbd5e1\" stroke-width=\"1.5\"/>\n", padL, padT+plotH, padL+plotW, padT+plotH)
-	xTicks := 5
-	for i := 0; i <= xTicks; i++ {
-		ratio := float64(i) / float64(xTicks)
-		rateVal := int(math.Round(ratio * float64(maxRate)))
-		xVal := padL + ratio*plotW
-		fmt.Fprintf(&buf, "  <line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#cbd5e1\" stroke-width=\"1\"/>\n", xVal, padT+plotH, xVal, padT+plotH+4)
-		fmt.Fprintf(&buf, "  <text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" fill=\"#64748b\" font-size=\"11\" font-family=\"system-ui, sans-serif\">%d RPS</text>\n", xVal, padT+plotH+18, rateVal)
-	}
-
-	// Axis Titles
-	fmt.Fprintf(&buf, "  <text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" fill=\"#475569\" font-size=\"12\" font-weight=\"600\" font-family=\"system-ui, sans-serif\">Offered Load Rate (Requests / Sec)</text>\n", padL+plotW/2, svgH-10)
-	fmt.Fprintf(&buf, "  <text transform=\"rotate(-90)\" x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" fill=\"#475569\" font-size=\"12\" font-weight=\"600\" font-family=\"system-ui, sans-serif\">P95 Latency (ms)</text>\n", -(padT + plotH/2), 20.0)
-
-	// Shaded area under the curve
-	var areaPoints []string
-	firstX := mapX(points[0].loadRate)
-	baseY := padT + plotH
-	areaPoints = append(areaPoints, fmt.Sprintf("%.1f,%.1f", firstX, baseY))
-	for _, pt := range points {
-		areaPoints = append(areaPoints, fmt.Sprintf("%.1f,%.1f", mapX(pt.loadRate), mapY(pt.avgP95Ms)))
-	}
-	lastX := mapX(points[len(points)-1].loadRate)
-	areaPoints = append(areaPoints, fmt.Sprintf("%.1f,%.1f", lastX, baseY))
-	fmt.Fprintf(&buf, "  <polygon points=\"%s\" fill=\"url(#curveGradient)\"/>\n", strings.Join(areaPoints, " "))
-
-	// Degradation curve polyline
-	var linePoints []string
-	for _, pt := range points {
-		linePoints = append(linePoints, fmt.Sprintf("%.1f,%.1f", mapX(pt.loadRate), mapY(pt.avgP95Ms)))
-	}
-	fmt.Fprintf(&buf, "  <polyline points=\"%s\" fill=\"none\" stroke=\"#4f46e5\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>\n", strings.Join(linePoints, " "))
-
-	// Threshold vertical markers
-	// 1. Sustainable Rate
-	if report.MaximumSustainableRate > 0 && report.MaximumSustainableRate <= maxRate {
-		sx := mapX(report.MaximumSustainableRate)
-		fmt.Fprintf(&buf, "  <line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#10b981\" stroke-width=\"2\" stroke-dasharray=\"4,3\"/>\n", sx, padT, sx, baseY)
-		fmt.Fprintf(&buf, "  <rect x=\"%.1f\" y=\"%.1f\" width=\"94\" height=\"20\" rx=\"4\" fill=\"#10b981\"/>\n", sx-47, padT-22)
-		fmt.Fprintf(&buf, "  <text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" fill=\"#ffffff\" font-size=\"10\" font-weight=\"700\" font-family=\"system-ui, sans-serif\">Sustainable: %d</text>\n", sx, padT-8, report.MaximumSustainableRate)
-	}
-
-	// 2. Degradation Knee Rate
-	if report.DegradationRate > 0 && report.DegradationRate <= maxRate {
-		kx := mapX(report.DegradationRate)
-		fmt.Fprintf(&buf, "  <line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#f59e0b\" stroke-width=\"2\" stroke-dasharray=\"4,3\"/>\n", kx, padT, kx, baseY)
-		fmt.Fprintf(&buf, "  <rect x=\"%.1f\" y=\"%.1f\" width=\"80\" height=\"20\" rx=\"4\" fill=\"#f59e0b\"/>\n", kx-40, padT-22)
-		fmt.Fprintf(&buf, "  <text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" fill=\"#ffffff\" font-size=\"10\" font-weight=\"700\" font-family=\"system-ui, sans-serif\">Knee: %d RPS</text>\n", kx, padT-8, report.DegradationRate)
-	}
-
-	// 3. Safety Boundary Rate (render if distinct from sustainable rate)
-	if report.SafetyBoundaryRate > 0 && report.SafetyBoundaryRate <= maxRate && report.SafetyBoundaryRate != report.MaximumSustainableRate {
-		bx := mapX(report.SafetyBoundaryRate)
-		fmt.Fprintf(&buf, "  <line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"#ef4444\" stroke-width=\"2\" stroke-dasharray=\"4,3\"/>\n", bx, padT, bx, baseY)
-		fmt.Fprintf(&buf, "  <rect x=\"%.1f\" y=\"%.1f\" width=\"86\" height=\"20\" rx=\"4\" fill=\"#ef4444\"/>\n", bx-43, padT-22)
-		fmt.Fprintf(&buf, "  <text x=\"%.1f\" y=\"%.1f\" text-anchor=\"middle\" fill=\"#ffffff\" font-size=\"10\" font-weight=\"700\" font-family=\"system-ui, sans-serif\">Breach: %d RPS</text>\n", bx, padT-8, report.SafetyBoundaryRate)
-	}
-
-	// Data Point Circles
-	for _, pt := range points {
-		cx := mapX(pt.loadRate)
-		cy := mapY(pt.avgP95Ms)
-		tooltip := fmt.Sprintf("Load: %d RPS | P95: %.1fms | Error: %.2f%%", pt.loadRate, pt.avgP95Ms, pt.avgError*100)
-		fmt.Fprintf(&buf, "  <circle cx=\"%.1f\" cy=\"%.1f\" r=\"5\" fill=\"#4f46e5\" stroke=\"#ffffff\" stroke-width=\"2\"><title>%s</title></circle>\n", cx, cy, template.HTMLEscapeString(tooltip))
-	}
-
-	buf.WriteString("</svg>")
-	return template.HTML(buf.String())
+	fmt.Fprintf(&b, `<text x="60" y="14" font-size="12">RPS (max %.2f)</text><text x="60" y="250" font-size="12">0s</text><text x="820" y="250" font-size="12">%.1fs</text><text x="160" y="274" fill="#16a34a" font-size="12">Measured service traffic</text><text x="460" y="274" fill="#2563eb" font-size="12">Offered load target</text></svg>`, maxRate, duration)
+	return template.HTML(b.String())
 }
 
-// templateFuncs defines helper functions available inside HTML templates.
 func templateFuncs() template.FuncMap {
 	return template.FuncMap{
 		"formatFloat": func(f float64, decimals int) string {
@@ -609,18 +466,26 @@ func templateFuncs() template.FuncMap {
 		"add": func(a, b int) int {
 			return a + b
 		},
-		"statusBadge": func(obs capacity.Observation, report *capacity.ExperimentReport) template.HTML {
-			rate := int(math.Round(obs.OfferedRate()))
-			if rate <= 0 {
-				return template.HTML(`<span class="badge badge-gray">Idle / Recovery</span>`)
+		"nullable": func(v *float64) string {
+			if v == nil {
+				return "Unavailable"
 			}
-			if report.SafetyBoundaryRate > 0 && rate >= report.SafetyBoundaryRate {
-				return template.HTML(`<span class="badge badge-rose">SLA Breach</span>`)
+			return fmt.Sprintf("%.2f", *v)
+		},
+		"nullablePercent": func(v *float64) string {
+			if v == nil {
+				return "Unavailable"
 			}
-			if report.DegradationRate > 0 && rate >= report.DegradationRate {
-				return template.HTML(`<span class="badge badge-amber">Degradation Knee</span>`)
+			return fmt.Sprintf("%.2f%%", *v*100)
+		},
+		"statusBadge": func(obs capacity.Observation, report *capacity.ExperimentReport) string {
+			if obs.SLAStatus == "breach" {
+				return "SLA breach"
 			}
-			return template.HTML(`<span class="badge badge-emerald">Sustainable</span>`)
+			if obs.SLAStatus == "within_limits" {
+				return "Within SLA limits"
+			}
+			return "Unavailable"
 		},
 	}
 }
@@ -926,38 +791,18 @@ const defaultHTMLTemplate = `<!DOCTYPE html>
       </div>
     </header>
 
-    <!-- Executive KPI Grid -->
     <section class="kpi-grid">
-      <div class="kpi-card">
-        <div class="kpi-label">Sustainable Ceiling</div>
-        <div class="kpi-value val-sustainable">{{.MaximumSustainableRate}} <span style="font-size: 16px; font-weight: 600;">RPS</span></div>
-        <div class="kpi-desc">Zero SLA violations</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Degradation Knee</div>
-        {{if gt .DegradationRate 0}}
-        <div class="kpi-value val-degradation">{{.DegradationRate}} <span style="font-size: 16px; font-weight: 600;">RPS</span></div>
-        <div class="kpi-desc">Latency slope surge &gt;50%</div>
-        {{else}}
-        <div class="kpi-value" style="color: var(--slate-500); font-size: 20px;">Not detected</div>
-        <div class="kpi-desc">No knee transition observed</div>
-        {{end}}
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Safety Breach Rate</div>
-        <div class="kpi-value val-safety">{{.SafetyBoundaryRate}} <span style="font-size: 16px; font-weight: 600;">RPS</span></div>
-        <div class="kpi-desc">Hard SLA boundary breach</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Recovery Time (RTO)</div>
-        <div class="kpi-value val-recovery">{{.RecoveryTimeSec}}<span style="font-size: 16px; font-weight: 600;">s</span></div>
-        <div class="kpi-desc">Baseline SLA restored</div>
-      </div>
-      <div class="kpi-card">
-        <div class="kpi-label">Peak Tested Load</div>
-        <div class="kpi-value val-tested">{{.MaximumTestedRate}} <span style="font-size: 16px; font-weight: 600;">RPS</span></div>
-        <div class="kpi-desc">Max load rate tested</div>
-      </div>
+      <div class="kpi-card"><div class="kpi-label">Peak measured service RPS</div><div class="kpi-value">{{nullable .Measurements.PeakMeasuredRate}}</div><div class="kpi-desc">Includes background traffic · {{.Measurements.SummaryScope}}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Peak offered load target</div><div class="kpi-value">{{nullable .Measurements.PeakOfferedRate}}</div><div class="kpi-desc">RPS target, not measured traffic</div></div>
+      <div class="kpi-card"><div class="kpi-label">Peak P95 latency</div><div class="kpi-value">{{nullable .Measurements.PeakP95LatencyMs}} ms</div></div>
+      <div class="kpi-card"><div class="kpi-label">Peak error rate</div><div class="kpi-value">{{nullablePercent .Measurements.PeakErrorRate}}</div></div>
+      <div class="kpi-card"><div class="kpi-label">Minimum availability</div><div class="kpi-value">{{nullablePercent .Measurements.MinAvailability}}</div></div>
+    </section>
+    <section class="section-card"><h2>Sustainable capacity estimate</h2>
+    {{if eq .Measurements.CapacityStatus "established"}}<p>{{nullable .Measurements.SustainableMeasuredRate}} measured service RPS at {{nullable .Measurements.SustainableOfferedRate}} offered RPS</p>{{else}}<p>Not established</p>{{end}}
+    <p>{{.Measurements.CapacityReason}}</p>
+    <h3>SLA breach</h3>{{if .ObservedBreach}}<p>Observed at {{nullable .Measurements.FirstBreachMeasuredRate}} measured RPS; offered target {{nullable .Measurements.FirstBreachOfferedRate}} RPS.</p>{{else}}<p>{{if eq .Measurements.BreachStatus "unavailable"}}Unavailable — no valid telemetry{{else}}Not observed{{end}}</p>{{end}}
+    <h3>Recovery</h3>{{if .ObservedRecovery}}<p>{{nullable .Measurements.RecoverySeconds}}s to observed SLA compliance</p>{{else if eq .Measurements.RecoveryStatus "not_recovered"}}<p>Not observed within {{nullable .Measurements.RecoveryWindowSeconds}}s of monitoring</p>{{else if eq .Measurements.RecoveryStatus "not_needed"}}<p>Not needed — no SLA breach observed</p>{{else}}<p>Not observed</p>{{end}}
     </section>
 
     <!-- Criticality Score Section -->
@@ -987,8 +832,8 @@ const defaultHTMLTemplate = `<!DOCTYPE html>
     <!-- Degradation Curve Section -->
     <section class="section-card">
       <div class="section-header">
-        <h2 class="section-title">Throughput Degradation Curve</h2>
-        <p class="section-subtitle">Latency scaling curve plotting P95 latency against progressive request load rates</p>
+        <h2 class="section-title">Measured and offered traffic over time</h2>
+        <p class="section-subtitle">Measured service traffic includes background requests. Offered load is the configured target. Rates use the trailing 30-second metric window.</p>
       </div>
       <div class="chart-container">
         {{.DegradationChartSVG}}
@@ -1026,7 +871,7 @@ const defaultHTMLTemplate = `<!DOCTYPE html>
             <tr>
               <th>#</th>
               <th>Timestamp</th>
-              <th>Load Rate</th>
+              <th>Measured service RPS</th><th>Offered target RPS</th><th>Phase</th>
               <th>P95 Latency</th>
               <th>Error Rate</th>
               <th>Availability</th>
@@ -1040,10 +885,10 @@ const defaultHTMLTemplate = `<!DOCTYPE html>
             <tr>
               <td>{{add $idx 1}}</td>
               <td>{{formatTime $obs.Timestamp}}</td>
-              <td><strong>{{formatFloat $obs.OfferedRate 0}} RPS</strong></td>
-              <td>{{formatFloat $obs.P95LatencyMs 1}} ms</td>
-              <td>{{formatPercent $obs.ErrorRate}}</td>
-              <td>{{formatPercent $obs.Availability}}</td>
+              <td><strong>{{if eq $obs.SLAStatus "unavailable"}}Unavailable{{else}}{{formatFloat $obs.LoadRate 2}} RPS{{end}}</strong></td><td>{{nullable $obs.InjectedRate}}</td><td>{{$obs.Phase}}</td>
+              <td>{{if eq $obs.SLAStatus "unavailable"}}Unavailable{{else}}{{formatFloat $obs.P95LatencyMs 1}} ms{{end}}</td>
+              <td>{{if eq $obs.SLAStatus "unavailable"}}Unavailable{{else}}{{formatPercent $obs.ErrorRate}}{{end}}</td>
+              <td>{{if eq $obs.SLAStatus "unavailable"}}Unavailable{{else}}{{formatPercent $obs.Availability}}{{end}}</td>
               <td>{{formatPercent $obs.CPUUtilization}}</td>
               <td>{{formatPercent $obs.MemoryUtilization}}</td>
               <td>{{statusBadge $obs $.Report}}</td>

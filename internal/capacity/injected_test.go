@@ -25,3 +25,12 @@ func TestInjectedLoadSeparatesBackgroundAndRecovery(t *testing.T) {
 		t.Fatalf("zero error tolerance not enforced: %+v", result)
 	}
 }
+
+func TestOfferedRateDoesNotCountAsCapacityWithoutMeasuredTraffic(t *testing.T) {
+	rate := 1500.0
+	observations := []capacity.Observation{{Timestamp: time.Now(), LoadRate: 2, InjectedRate: &rate, P95LatencyMs: 2, Availability: 1}}
+	result := capacity.NewAnalyzer().Analyze(observations, safety.SafetyPolicy{MaxP95LatencyMs: 100, MaxErrorRate: 0.1})
+	if result.MaximumTestedRate != 1500 || result.MaximumSustainableRate != 0 || result.DegradationRate != 0 || result.SafetyBoundaryRate != 0 {
+		t.Fatalf("unobserved traffic must not establish capacity: %+v", result)
+	}
+}

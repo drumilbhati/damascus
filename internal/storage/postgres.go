@@ -491,7 +491,7 @@ func (r *PostgresExperimentRepository) SaveObservation(ctx context.Context, expI
 			$1, $2, $3, $4, $5, $6, $7, $8, $9
 		)`
 
-	loadRate := int(math.Round(obs.LoadRate))
+	loadRate := obs.LoadRate
 
 	_, err := r.db.ExecContext(ctx, query,
 		expID,
@@ -541,7 +541,7 @@ func (r *PostgresExperimentRepository) GetObservations(ctx context.Context, expI
 	for rows.Next() {
 		var (
 			obs      capacity.Observation
-			loadRate int
+			loadRate float64
 		)
 
 		err := rows.Scan(
@@ -812,5 +812,9 @@ func (r *PostgresExperimentRepository) GetServiceScores(ctx context.Context, exp
 // EnsureObservationSchema upgrades existing local volumes without dropping data.
 func EnsureObservationSchema(ctx context.Context, db DBTX) error {
 	_, err := db.ExecContext(ctx, "ALTER TABLE observations ADD COLUMN IF NOT EXISTS injected_rate DOUBLE PRECISION")
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, "ALTER TABLE observations ALTER COLUMN load_rate TYPE DOUBLE PRECISION USING load_rate::DOUBLE PRECISION")
 	return err
 }
