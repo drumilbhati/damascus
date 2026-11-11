@@ -60,6 +60,7 @@ type mockExperimentRepository struct {
 	listFn            func(ctx context.Context) ([]experiment.Experiment, error)
 	getReportFn       func(ctx context.Context, expID string) (*capacity.ExperimentReport, error)
 	getObservationsFn func(ctx context.Context, expID string) ([]capacity.Observation, error)
+	saveReportFn      func(ctx context.Context, report *capacity.ExperimentReport) error
 }
 
 func (m *mockExperimentRepository) GetByID(ctx context.Context, id string) (*experiment.Experiment, error) {
@@ -88,6 +89,13 @@ func (m *mockExperimentRepository) GetObservations(ctx context.Context, expID st
 		return m.getObservationsFn(ctx, expID)
 	}
 	return nil, nil
+}
+
+func (m *mockExperimentRepository) SaveReport(ctx context.Context, report *capacity.ExperimentReport) error {
+	if m.saveReportFn != nil {
+		return m.saveReportFn(ctx, report)
+	}
+	return nil
 }
 
 type mockGraphAnalyzer struct {
@@ -655,7 +663,7 @@ func TestHandler_GetDependencies(t *testing.T) {
 		},
 	}
 
-	h := NewHandler(nil, nil, analyzer)
+	h := NewHandler(nil, nil, analyzer, WithServiceTargetURLs(map[string]string{"cartservice": "http://cartservice:8080/cart"}))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/dependencies?lookback=7200", nil)
 	rec := httptest.NewRecorder()
@@ -671,6 +679,9 @@ func TestHandler_GetDependencies(t *testing.T) {
 	}
 	if len(resp.Scores) != 2 || resp.Graph == nil {
 		t.Errorf("unexpected dependencies response: %+v", resp)
+	}
+	if got := resp.TargetURLs["cartservice"]; got != "http://cartservice:8080/cart" {
+		t.Errorf("target URL for cartservice = %q", got)
 	}
 }
 
@@ -771,6 +782,38 @@ func TestHandler_GetExperimentReport(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestHandler_BackfillsMissingAbortedReport(t *testing.T) {
+	exp := &experiment.Experiment{
+		ID: "aborted-exp", TargetService: "cartservice", State: experiment.StateAborted,
+		StopReason: "load generator failed",
+		Config:     experiment.ExperimentConfig{MaxP95LatencyMs: 100, MaxErrorRatePercent: 5, MinAvailabilityPct: 95},
+	}
+	var saved *capacity.ExperimentReport
+	repo := &mockExperimentRepository{
+		getByIDFn:   func(context.Context, string) (*experiment.Experiment, error) { return exp, nil },
+		getReportFn: func(context.Context, string) (*capacity.ExperimentReport, error) { return nil, nil },
+		getObservationsFn: func(context.Context, string) ([]capacity.Observation, error) {
+			return []capacity.Observation{{Timestamp: time.Now(), LoadRate: 12, P95LatencyMs: 10, ErrorRate: 0, Availability: 1}}, nil
+		},
+		saveReportFn: func(_ context.Context, value *capacity.ExperimentReport) error {
+			saved = value
+			return nil
+		},
+	}
+	h := NewHandler(nil, repo, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/experiments/aborted-exp/report", nil)
+	req.SetPathValue("id", exp.ID)
+	rec := httptest.NewRecorder()
+	h.GetExperimentReport(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if saved == nil || saved.ExperimentID != exp.ID || saved.StopReason != exp.StopReason || len(saved.Observations) != 1 {
+		t.Fatalf("aborted report was not generated and saved with run data: %+v", saved)
 	}
 }
 

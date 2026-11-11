@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useExperiment, useExperimentStatus, useExperimentReport } from '../api/hooks';
 import { startExperiment, stopExperiment } from '../api/endpoints';
+import type { StartExperimentPayload } from '../types';
 import { MetricsChart } from '../components/MetricsChart';
 import {
   Play,
@@ -28,10 +29,34 @@ function StateBadge({ state }: { state: string }) {
   );
 }
 
+function defaultRequestForTarget(targetURL: string): string | null {
+  const path = targetURL.toLowerCase();
+  if (path.includes('/cartservice/additem')) {
+    return JSON.stringify({ userId: 'damascus-load-test', item: { productId: 'OLJCESPC7Z', quantity: 1 } }, null, 2);
+  }
+  if (path.includes('/cartservice/emptycart')) {
+    return JSON.stringify({ userId: 'damascus-load-test' }, null, 2);
+  }
+  if (path.includes('/shippingservice/shiporder')) {
+    return JSON.stringify({ address: { streetAddress: '1600 Amphitheatre Parkway', city: 'Mountain View', state: 'CA', country: 'US', zipCode: '94043' }, items: [{ productId: 'OLJCESPC7Z', quantity: 1 }] }, null, 2);
+  }
+  if (path.includes('/paymentservice/charge')) {
+    return JSON.stringify({ amount: { currencyCode: 'USD', units: 1 }, creditCard: { creditCardNumber: '4111111111111111', creditCardCvv: 123, creditCardExpirationYear: 2030, creditCardExpirationMonth: 12 } }, null, 2);
+  }
+  if (path.includes('/checkoutservice/placeorder')) {
+    return JSON.stringify({ userId: 'damascus-load-test', userCurrency: 'USD', address: { streetAddress: '1600 Amphitheatre Parkway', city: 'Mountain View', state: 'CA', country: 'US', zipCode: '94043' }, email: 'load-test@example.com', creditCard: { creditCardNumber: '4111111111111111', creditCardCvv: 123, creditCardExpirationYear: 2030, creditCardExpirationMonth: 12 } }, null, 2);
+  }
+  if (path.includes('/emailservice/send_order_confirmation')) {
+    return JSON.stringify({ email: 'load-test@example.com', order: { order_id: 'damascus-load-test', shipping_tracking_id: 'test-tracking', shipping_cost: { units: 1, nanos: 0, currency_code: 'USD' }, shipping_address: { street_address_1: '1600 Amphitheatre Parkway', street_address_2: '', city: 'Mountain View', country: 'US', zip_code: '94043' }, items: [{ item: { product_id: 'OLJCESPC7Z', quantity: 1 }, cost: { units: 1, nanos: 0, currency_code: 'USD' } }] } }, null, 2);
+  }
+  return null;
+}
+
 export const ExperimentDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const { data: experiment, error: expError, mutate: mutateExp, isLoading } = useExperiment(id);
-  const { data: report } = useExperimentReport(experiment?.state === 'COMPLETED' ? id : null);
+  const hasReport = experiment?.state === 'COMPLETED' || experiment?.state === 'ABORTED';
+  const { data: report } = useExperimentReport(hasReport ? id : null);
   const history = useMemo(() => report?.observations.filter(o => !o.telemetry_missing).map(o => ({ ...o, experiment_id: report.experiment_id, target_service: report.target_service, request_rate: o.load_rate, offered_rate: o.injected_rate ?? undefined, p50_latency_ms: 0, p99_latency_ms: 0, cpu_utilization: o.cpu_utilization ?? 0, memory_utilization: o.memory_utilization ?? 0 })), [report]);
   const isRunning = experiment?.state === 'RUNNING';
   const { data: latestSnapshot, error: telemetryError, mutate: refreshTelemetry } = useExperimentStatus(
@@ -45,18 +70,49 @@ export const ExperimentDetailPage: React.FC = () => {
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [isActing, setIsActing] = useState(false);
+  const [requestMethod, setRequestMethod] = useState<'GET' | 'POST'>('GET');
+  const [requestPayload, setRequestPayload] = useState('');
+
+  useEffect(() => {
+    const defaults = defaultRequestForTarget(experiment?.target_url ?? '');
+    if (defaults) {
+      setRequestMethod('POST');
+      setRequestPayload((current) => current || defaults);
+    }
+  }, [experiment?.target_url]);
 
   const handleStart = async () => {
-    if (!id) return;
+    if (!id || !experiment) return;
+    if (requestMethod === 'POST' && requestPayload.trim() && !isValidJSON(requestPayload)) {
+      setActionError('Request payload must be valid JSON');
+      return;
+    }
+    if (requestMethod === 'POST' && !window.confirm('This same POST request and payload will be replayed at every scheduled request rate. It may create orders, alter carts, or trigger other demo side effects. Continue only against a test environment.')) {
+      return;
+    }
     setActionError(null);
     setIsActing(true);
     try {
-      await startExperiment(id);
+      const plan: NonNullable<StartExperimentPayload['plan']> = {
+        target_url: experiment.target_url,
+        method: requestMethod,
+      };
+      if (requestMethod === 'POST' && requestPayload.trim()) plan.payload = requestPayload;
+      await startExperiment(id, { plan });
       mutateExp();
     } catch (err: any) {
       setActionError(err.message || 'Failed to start experiment');
     } finally {
       setIsActing(false);
+    }
+  };
+
+  const isValidJSON = (value: string) => {
+    try {
+      JSON.parse(value);
+      return true;
+    } catch {
+      return false;
     }
   };
 
@@ -150,7 +206,7 @@ export const ExperimentDetailPage: React.FC = () => {
             </button>
           )}
 
-          {experiment.state === 'COMPLETED' && (
+          {(experiment.state === 'COMPLETED' || experiment.state === 'ABORTED') && (
             <Link
               to={`/reports?experiment=${id}`}
               className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-semibold"
@@ -177,9 +233,26 @@ export const ExperimentDetailPage: React.FC = () => {
         <p role="alert" className="rounded border border-amber-700 p-3 text-xs text-amber-300">This experiment targets localhost. When the control plane runs in Docker, that address points to its own container. Create a new experiment with a reachable URL, such as http://frontend:8080/ for the demo shop.</p>
       )}
       {experiment.state === 'CREATED' ? (
-        <div className="rounded border border-slate-700 p-5 text-sm text-slate-300">
+        <div className="rounded border border-slate-700 p-5 text-sm text-slate-300 space-y-3">
           <p className="font-semibold">Ready to start</p>
-          <p className="mt-1">No traffic has been sent yet. Review the settings below, then click Start Traffic Injection. Measurements will appear after traffic starts and telemetry is collected.</p>
+          <p>No traffic has been sent yet. Choose the HTTP method and request body for the configured target, then start injection.</p>
+          <div className="grid gap-3 sm:grid-cols-[140px_1fr]">
+            <label className="text-xs" style={{ color: '#8b949e' }}>
+              Request method
+              <select value={requestMethod} onChange={(event) => setRequestMethod(event.target.value as 'GET' | 'POST')} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-2 text-xs text-slate-200">
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+              </select>
+            </label>
+            {requestMethod === 'POST' && (
+              <label className="text-xs" style={{ color: '#8b949e' }}>
+                JSON request body (same body replayed for every request)
+                <textarea value={requestPayload} onChange={(event) => setRequestPayload(event.target.value)} placeholder={'{\n  "from": {"currencyCode": "USD", "units": 1},\n  "toCode": "EUR"\n}'} rows={5} className="mt-1 w-full rounded border border-slate-700 bg-slate-950 px-2 py-2 font-mono text-xs text-slate-200" />
+              </label>
+            )}
+          </div>
+          {requestMethod === 'POST' && <p role="alert" className="rounded border border-amber-800 bg-amber-950/30 p-2 text-xs text-amber-300">POST bodies are replayed at the full configured RPS. Mutating calls can add cart items, charge simulated cards, send emails, or place orders. Use test-only data; every POST start requires confirmation.</p>}
+          <p className="text-xs">GET operations may take a JSON request in the gateway URL’s <code>request</code> query parameter. POST is required for state-changing adapter operations.</p>
         </div>
       ) : (
       <>

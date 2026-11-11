@@ -182,17 +182,17 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 	if m.graphAnalyzer != nil {
 		dependencyGraph, err := m.graphAnalyzer.BuildGraph(ctx, 3600)
 		if err != nil {
-			_ = m.transitionState(ctx, id, StateAborted, err.Error())
+			m.abortExperiment(context.Background(), id, err.Error())
 			return fmt.Errorf("failed to build dependency graph: %w", err)
 		}
 		scores = m.graphAnalyzer.ScoreCriticality(dependencyGraph)
 	}
 	if m.stressEngine == nil {
-		_ = m.transitionState(ctx, id, StateAborted, "stress engine is nil")
+		m.abortExperiment(context.Background(), id, "stress engine is nil")
 		return errors.New("stress engine is nil")
 	}
 	if m.watcher == nil {
-		_ = m.transitionState(ctx, id, StateAborted, "watcher is nil")
+		m.abortExperiment(context.Background(), id, "watcher is nil")
 		return errors.New("watcher is nil")
 	}
 
@@ -326,7 +326,7 @@ func (m *Manager) StopExperiment(ctx context.Context, id, reason string) error {
 		return fmt.Errorf("failed to retrieve experiment %s: %w", id, err)
 	}
 	if exp != nil && (exp.State == StateRunning || exp.State == StateStopping) {
-		if err := m.transitionState(ctx, id, StateAborted, reason); err != nil {
+		if err := m.abortExperiment(ctx, id, reason); err != nil {
 			return fmt.Errorf("failed to abort orphaned experiment %s: %w", id, err)
 		}
 		return nil
@@ -508,6 +508,79 @@ func (m *Manager) finishExperiment(
 	}
 }
 
-func (m *Manager) abortExperiment(ctx context.Context, id, reason string) {
-	_ = m.transitionState(ctx, id, StateAborted, reason)
+func (m *Manager) abortExperiment(_ context.Context, id, reason string) error {
+	// Reports are useful even when the run fails before its analysis phase. Save
+	// one from the observations collected so far before publishing ABORTED, so a
+	// client that sees the terminal state can immediately fetch its report.
+	reportCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	exp, err := m.repo.GetByID(reportCtx, id)
+	var reportErr error
+	if err == nil && exp != nil {
+		exp.StopReason = reason
+		observations, obsErr := m.repo.GetObservations(reportCtx, id)
+		if obsErr != nil {
+			observations = nil
+		}
+		policy := safety.SafetyPolicy{
+			MaxP95LatencyMs: exp.Config.MaxP95LatencyMs,
+			MaxErrorRate:    exp.Config.MaxErrorRatePercent / 100,
+			MinAvailability: exp.Config.MinAvailabilityPct / 100,
+		}
+		result := capacity.NewAnalyzer().Analyze(observations, policy)
+
+		var generated *capacity.ExperimentReport
+		if m.reportEngine != nil {
+			generated, err = m.reportEngine.Generate(*exp, result, nil, observations)
+		}
+		if err != nil || generated == nil {
+			generated = fallbackAbortedReport(*exp, result, observations, err)
+		}
+		generated.ExperimentID = exp.ID
+		generated.StopReason = reason
+		if saveErr := m.repo.SaveReport(reportCtx, generated); saveErr != nil {
+			// A custom report can fail serialization or persistence. Replace it
+			// with a minimal analyzer-backed report before the idempotent retry.
+			fallback := fallbackAbortedReport(*exp, result, observations, fmt.Errorf("save generated report: %w", saveErr))
+			if retryErr := m.repo.SaveReport(reportCtx, fallback); retryErr != nil {
+				reportErr = fmt.Errorf("save aborted experiment report: %w (fallback save failed: %v)", saveErr, retryErr)
+			}
+		}
+	} else if err != nil {
+		reportErr = fmt.Errorf("load experiment for abort report: %w", err)
+	}
+
+	stateErr := m.transitionState(reportCtx, id, StateAborted, reason)
+	if reportErr != nil || stateErr != nil {
+		return errors.Join(reportErr, stateErr)
+	}
+	return nil
+}
+
+func fallbackAbortedReport(exp Experiment, result capacity.CapacityResult, observations []capacity.Observation, generationErr error) *capacity.ExperimentReport {
+	recommendations := []string{"Experiment aborted before normal analysis completed; capacity estimates use the observations available at abort time."}
+	if exp.StopReason != "" {
+		recommendations = append(recommendations, "Experiment stopped: "+exp.StopReason)
+	}
+	if generationErr != nil {
+		recommendations = append(recommendations, "The configured report generator failed; a basic fallback report was saved: "+generationErr.Error())
+	}
+	return &capacity.ExperimentReport{
+		Measurements:           result.Measurements,
+		StopReason:             exp.StopReason,
+		ExperimentID:           exp.ID,
+		TargetService:          exp.TargetService,
+		MaximumTestedRate:      result.MaximumTestedRate,
+		PeakMeasuredRate:       result.PeakMeasuredRate,
+		MaximumSustainableRate: result.MaximumSustainableRate,
+		DegradationRate:        result.DegradationRate,
+		SafetyBoundaryRate:     result.SafetyBoundaryRate,
+		RecoveryTimeSec:        result.RecoveryTimeSec,
+		ObservedBreach:         result.ObservedBreach,
+		ObservedRecovery:       result.ObservedRecovery,
+		Observations:           append([]capacity.Observation(nil), observations...),
+		Recommendations:        recommendations,
+		GeneratedAt:            time.Now().UTC(),
+	}
 }

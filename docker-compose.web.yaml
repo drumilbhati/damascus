@@ -15,4 +15,4 @@ services:
 
     environment:
       PORT: "80"
-      BACKEND_URL: "http://host.docker.internal:8080/api/"
+      BACKEND_URL: "http://host.docker.internal:8080"

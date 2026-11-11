@@ -222,7 +222,11 @@ func run() error {
 		}
 		maxInFlight = parsed
 	}
-	stressEngine := stress.NewEngine(httpClient, stress.WithMaxInFlight(maxInFlight))
+	serviceTargetURLs, err := config.ParseServiceTargetURLs(os.Getenv("SERVICE_TARGET_URLS"))
+	if err != nil {
+		return err
+	}
+	stressEngine := stress.NewEngine(stress.NewLoadHTTPClient(maxInFlight, 10*time.Second), stress.WithMaxInFlight(maxInFlight))
 
 	var watcherEngine experiment.Watcher
 	promClient, promErr := watcher.NewPrometheusClient(cfg.PrometheusURL)
@@ -265,6 +269,7 @@ func run() error {
 		graphAnalyzer,
 		api.WithReportEngine(reportEngine),
 		api.WithObservabilityChecker(healthChecker),
+		api.WithServiceTargetURLs(serviceTargetURLs),
 	)
 	router := api.NewRouter(handler)
 

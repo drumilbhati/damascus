@@ -8,7 +8,6 @@ import (
 	"damascus/internal/stress"
 	"damascus/internal/watcher"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -82,11 +81,11 @@ func TestRegressionSingleActiveExperimentAndSafetyReason(t *testing.T) {
 type failedTransport func(*http.Request) (*http.Response, error)
 
 func (f failedTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-func TestRegressionHTTPFailureAbortsRatherThanCompletes(t *testing.T) {
+func TestRegressionNetworkFailureAbortsWithReport(t *testing.T) {
 	repo := newMockRepo()
 	w := newMockWatcher()
 	engine := stress.NewEngine(&http.Client{Transport: failedTransport(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 503, Body: io.NopCloser(strings.NewReader("unavailable")), Header: make(http.Header)}, nil
+		return nil, errors.New("dial tcp: connection refused")
 	})})
 	m := experiment.NewManager(nil, engine, w, &mockSafetyController{}, &mockCapacityAnalyzer{}, &mockReportEngine{}, repo)
 	defer m.Shutdown()
@@ -95,11 +94,13 @@ func TestRegressionHTTPFailureAbortsRatherThanCompletes(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := waitState(t, m, exp.ID, experiment.StateAborted)
-	if !strings.Contains(done.StopReason, "503") {
-		t.Fatalf("HTTP failure not persisted: %s", done.StopReason)
+	if !strings.Contains(done.StopReason, "connection refused") {
+		t.Fatalf("network failure not persisted: %s", done.StopReason)
 	}
-	if r, _ := repo.GetReport(context.Background(), exp.ID); r != nil {
-		t.Fatal("failed injection produced a successful capacity report")
+	if r, _ := repo.GetReport(context.Background(), exp.ID); r == nil {
+		t.Fatal("aborted experiment did not produce a report")
+	} else if r.ExperimentID != exp.ID || !strings.Contains(r.StopReason, "connection refused") {
+		t.Fatalf("aborted experiment report is missing failure details: %+v", r)
 	}
 }
 

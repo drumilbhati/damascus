@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useExperiments, useDependencies } from '../api/hooks';
 import { createExperiment } from '../api/endpoints';
@@ -74,6 +74,7 @@ export const ExperimentsPage: React.FC = () => {
     (a, b) => b.score - a.score || a.service_name.localeCompare(b.service_name)
   ), [dependencies?.scores]);
   const availableServices = useMemo(() => Object.keys(dependencies?.graph?.nodes ?? {}).sort(), [dependencies?.graph?.nodes]);
+  const targetURLsByService = dependencies?.target_urls ?? {};
   const recommendation = rankedScores.find((score) => score.score > 0 && availableServices.includes(score.service_name));
   const scoresByService = new Map(rankedScores.map((score) => [score.service_name, score]));
 
@@ -95,6 +96,12 @@ export const ExperimentsPage: React.FC = () => {
   };
 
   const effectiveTargetService = targetService || recommendation?.service_name || '';
+
+  useEffect(() => {
+    if (effectiveTargetService && targetURLsByService[effectiveTargetService]) {
+      setTargetURL(targetURLsByService[effectiveTargetService]);
+    }
+  }, [effectiveTargetService, dependencies?.target_urls]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -248,8 +255,7 @@ export const ExperimentsPage: React.FC = () => {
                   required
                 />
                 <p className="mt-1 text-xs" style={{ color: '#8b949e' }}>
-                  Use a URL reachable by the control plane. For the Docker demo shop, use http://frontend:8080/.
-                  For a service running on your Mac, use host.docker.internal instead of localhost.
+                  Use a URL reachable by the control-plane container. A configured service URL is filled in when you select that service; you can edit it. For Docker, use service DNS names (for example http://frontend:8080/), not localhost. gRPC-only services need an HTTP gateway.
                 </p>
               </div>
 
@@ -276,7 +282,7 @@ export const ExperimentsPage: React.FC = () => {
                 </div>
 
                 {refreshMessage && <p role="status" className="mb-2 text-xs" style={{ color: '#8b949e' }}>{refreshMessage}</p>}
-                <p className="mb-2 text-xs" style={{ color: '#8b949e' }}>Ranking uses existing cluster traces from the last hour. The URL specifies where test traffic will be sent; the selected service specifies which telemetry to monitor.</p>
+                <p className="mb-2 text-xs" style={{ color: '#8b949e' }}>Ranking uses existing cluster traces from the last hour. The URL specifies where test traffic will be sent; the selected service specifies which telemetry to monitor. Configure SERVICE_TARGET_URLS to associate service names with directly callable HTTP endpoints.</p>
                 <p className="mb-2 text-xs" style={{ color: '#8b949e' }}>Traffic rates use the retrieved trace sample, which may cover only part of the traffic.</p>
                 {loadingServices ? (
                   <div
@@ -300,7 +306,10 @@ export const ExperimentsPage: React.FC = () => {
                       style={inputStyle}
                       placeholder="e.g. checkout"
                       value={targetService}
-                      onChange={(e) => setTargetService(e.target.value)}
+                      onChange={(e) => {
+                        setTargetService(e.target.value);
+                        setTargetURL(targetURLsByService[e.target.value] ?? '');
+                      }}
                       required
                     />
                   </div>
@@ -318,7 +327,10 @@ export const ExperimentsPage: React.FC = () => {
                       style={inputStyle}
                       placeholder="e.g. checkout"
                       value={targetService}
-                      onChange={(e) => setTargetService(e.target.value)}
+                      onChange={(e) => {
+                        setTargetService(e.target.value);
+                        setTargetURL(targetURLsByService[e.target.value] ?? '');
+                      }}
                       required
                     />
                   </div>
@@ -327,7 +339,11 @@ export const ExperimentsPage: React.FC = () => {
                     className={inputCls}
                     style={inputStyle}
                     value={effectiveTargetService}
-                    onChange={(e) => setTargetService(e.target.value)}
+                    onChange={(e) => {
+                      const service = e.target.value;
+                      setTargetService(service);
+                      setTargetURL(targetURLsByService[service] ?? '');
+                    }}
                     required
                   >
                     <option value="">— select a service —</option>
@@ -336,7 +352,7 @@ export const ExperimentsPage: React.FC = () => {
                     )}
                     {availableServices.slice().sort((a, b) => (scoresByService.get(b)?.score ?? 0) - (scoresByService.get(a)?.score ?? 0) || a.localeCompare(b)).map((svc) => (
                       <option key={svc} value={svc}>
-                        {svc}{scoresByService.has(svc) ? ` — ${((scoresByService.get(svc)?.score ?? 0) * 100).toFixed(1)}%` : ''}{svc === recommendation?.service_name ? ' (recommended)' : ''}
+                        {svc}{targetURLsByService[svc] ? ' — URL configured' : ' — enter URL manually'}{scoresByService.has(svc) ? ` · ${((scoresByService.get(svc)?.score ?? 0) * 100).toFixed(1)}%` : ''}{svc === recommendation?.service_name ? ' (recommended)' : ''}
                       </option>
                     ))}
                   </select>

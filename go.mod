@@ -4,12 +4,15 @@ go 1.26.4
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/bufbuild/protocompile v0.14.1
 	github.com/google/uuid v1.6.0
 	github.com/lib/pq v1.12.3
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/common v0.70.1
 	github.com/segmentio/kafka-go v0.4.51
 	github.com/twmb/franz-go v1.22.2
+	google.golang.org/grpc v1.72.1
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -20,5 +23,9 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.33 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/twmb/franz-go/pkg/kmsg v1.15.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
+	golang.org/x/net v0.57.0 // indirect
+	golang.org/x/sync v0.22.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/text v0.40.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250218202821-56aae31c358a // indirect
 )

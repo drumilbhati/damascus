@@ -15,6 +15,7 @@ import (
 	"damascus/internal/experiment"
 	"damascus/internal/graph"
 	reportpkg "damascus/internal/report"
+	"damascus/internal/safety"
 	"damascus/internal/storage"
 	"damascus/internal/stress"
 	"damascus/internal/watcher"
@@ -100,8 +101,9 @@ type StatusResponse struct {
 
 // DependenciesResponse wraps the microservice dependency topology graph and criticality scores.
 type DependenciesResponse struct {
-	Graph  *graph.DependencyGraph `json:"graph"`
-	Scores []graph.ServiceScore   `json:"scores"`
+	Graph      *graph.DependencyGraph `json:"graph"`
+	Scores     []graph.ServiceScore   `json:"scores"`
+	TargetURLs map[string]string      `json:"target_urls,omitempty"`
 }
 
 // ServicesResponse is the response body for GET /api/services.
@@ -116,13 +118,14 @@ type ErrorResponse struct {
 
 // Handler orchestrates REST HTTP endpoints and delegates to domain services.
 type Handler struct {
-	service          ExperimentService
-	repo             ExperimentRepository
-	graphAnalyzer    GraphAnalyzer
-	snapshotProvider SnapshotProvider
-	checker          ObservabilityChecker
-	reportEngine     reportpkg.ReportEngine
-	logger           *slog.Logger
+	service           ExperimentService
+	repo              ExperimentRepository
+	graphAnalyzer     GraphAnalyzer
+	snapshotProvider  SnapshotProvider
+	checker           ObservabilityChecker
+	reportEngine      reportpkg.ReportEngine
+	logger            *slog.Logger
+	serviceTargetURLs map[string]string
 }
 
 // HandlerOption configures dependencies for Handler.
@@ -146,6 +149,16 @@ func WithSnapshotProvider(sp SnapshotProvider) HandlerOption {
 func WithObservabilityChecker(checker ObservabilityChecker) HandlerOption {
 	return func(h *Handler) {
 		h.checker = checker
+	}
+}
+
+// WithServiceTargetURLs configures HTTP targets keyed by the service.name used in telemetry.
+func WithServiceTargetURLs(targetURLs map[string]string) HandlerOption {
+	return func(h *Handler) {
+		h.serviceTargetURLs = make(map[string]string, len(targetURLs))
+		for service, targetURL := range targetURLs {
+			h.serviceTargetURLs[service] = targetURL
+		}
 	}
 }
 
@@ -557,8 +570,9 @@ func (h *Handler) GetDependencies(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.writeJSON(w, http.StatusOK, DependenciesResponse{
-		Graph:  depGraph,
-		Scores: scores,
+		Graph:      depGraph,
+		Scores:     scores,
+		TargetURLs: h.serviceTargetURLs,
 	})
 }
 
@@ -592,8 +606,35 @@ func (h *Handler) GetExperimentReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if report == nil {
-		h.writeError(w, http.StatusNotFound, fmt.Sprintf("report for experiment %s was not found", id))
-		return
+		if exp.State == experiment.StateAborted {
+			observations, err := h.repo.GetObservations(r.Context(), id)
+			if err != nil {
+				h.handleServiceError(w, err, "get_observations_for_aborted_report")
+				return
+			}
+			policy := safety.SafetyPolicy{
+				MaxP95LatencyMs: exp.Config.MaxP95LatencyMs,
+				MaxErrorRate:    exp.Config.MaxErrorRatePercent / 100,
+				MinAvailability: exp.Config.MinAvailabilityPct / 100,
+			}
+			result := capacity.NewAnalyzer().Analyze(observations, policy)
+			report, err = defaultReportEngine.Generate(*exp, result, nil, observations)
+			if err != nil {
+				h.handleServiceError(w, err, "generate_aborted_report")
+				return
+			}
+			if saver, ok := h.repo.(interface {
+				SaveReport(context.Context, *capacity.ExperimentReport) error
+			}); ok {
+				if err := saver.SaveReport(r.Context(), report); err != nil {
+					h.handleServiceError(w, err, "save_aborted_report")
+					return
+				}
+			}
+		} else {
+			h.writeError(w, http.StatusNotFound, fmt.Sprintf("report for experiment %s was not found", id))
+			return
+		}
 	}
 
 	report, err = defaultReportEngine.Recalculate(*exp, report)

@@ -5,6 +5,13 @@ server {
     root /usr/share/nginx/html;
     index index.html index.htm;
 
+    # Docker DNS entries can appear after Nginx starts or change when the API
+    # container is recreated. Resolve the backend at request time instead of
+    # making Nginx startup depend on an immediately resolvable upstream.
+    resolver 127.0.0.11 valid=10s ipv6=off;
+    resolver_timeout 2s;
+    set $backend_url "${BACKEND_URL}";
+
     # Gzip Compression
     gzip on;
     gzip_vary on;
@@ -25,7 +32,7 @@ server {
 
     # Proxy API requests to Damascus backend API
     location /api/ {
-        proxy_pass ${BACKEND_URL};
+        proxy_pass $backend_url$request_uri;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
@@ -48,4 +55,3 @@ server {
         root /usr/share/nginx/html;
     }
 }
-

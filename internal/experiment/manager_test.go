@@ -154,6 +154,51 @@ func TestGeneratorSaturationCompletesWithReport(t *testing.T) {
 	}
 }
 
+func TestAbortedExperimentAlwaysGetsFallbackReport(t *testing.T) {
+	repo := newMockRepo()
+	mgr := experiment.NewManager(nil, nil, nil, nil, nil, nil, repo)
+	t.Cleanup(mgr.Shutdown)
+	exp, err := mgr.CreateExperiment(context.Background(), "frontend", "http://frontend:8080", experiment.ExperimentStep, experiment.ExperimentConfig{
+		InitialRate: 10, StepRate: 10, MaxRate: 20, StepDurationSeconds: 1,
+		MaxP95LatencyMs: 100, MaxErrorRatePercent: 10, MinAvailabilityPct: 95,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	injectedRate := 10.0
+	if err := repo.SaveObservation(context.Background(), exp.ID, capacity.Observation{
+		Timestamp: time.Now().UTC(), LoadRate: 9, InjectedRate: &injectedRate,
+		P95LatencyMs: 12, ErrorRate: 0, Availability: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	plan := stress.LoadPlan{TargetURL: exp.TargetURL, Method: "GET", InitialRate: 10, StepRate: 10, MaxRate: 20, StepDurationSeconds: 1}
+	if err := mgr.StartExperiment(context.Background(), exp.ID, plan); err == nil {
+		t.Fatal("expected missing stress engine to abort start")
+	}
+
+	got, err := repo.GetByID(context.Background(), exp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != experiment.StateAborted {
+		t.Fatalf("state = %s, want ABORTED", got.State)
+	}
+	report, err := repo.GetReport(context.Background(), exp.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report == nil || report.ExperimentID != exp.ID {
+		t.Fatalf("fallback report missing or invalid: %+v", report)
+	}
+	if report.StopReason != "stress engine is nil" {
+		t.Fatalf("report stop reason = %q, want missing engine reason", report.StopReason)
+	}
+	if len(report.Observations) != 1 || report.Observations[0].LoadRate != 9 {
+		t.Fatalf("fallback report did not include recorded observations: %+v", report.Observations)
+	}
+}
+
 func newMockStressEngine() *mockStressEngine {
 	return &mockStressEngine{
 		startBlockCh: make(chan struct{}),
@@ -277,7 +322,7 @@ func (c *mockCapacityAnalyzer) Analyze(obs []capacity.Observation, p safety.Safe
 type mockReportEngine struct{}
 
 func (r *mockReportEngine) Generate(exp experiment.Experiment, capResult capacity.CapacityResult, scores []graph.ServiceScore, obs []capacity.Observation) (*capacity.ExperimentReport, error) {
-	return &capacity.ExperimentReport{ExperimentID: exp.ID}, nil
+	return &capacity.ExperimentReport{ExperimentID: exp.ID, StopReason: exp.StopReason, Observations: obs}, nil
 }
 
 func TestManager_TransitionState_ThreadSafe(t *testing.T) {

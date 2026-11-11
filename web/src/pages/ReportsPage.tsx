@@ -7,12 +7,12 @@ import {
 
 export const ReportsPage: React.FC = () => {
   const { data: experiments } = useExperiments();
-  const completedExperiments = experiments?.filter((e) => e.state === 'COMPLETED') || [];
+  const reportableExperiments = experiments?.filter((e) => e.state === 'COMPLETED' || e.state === 'ABORTED') || [];
   const [selectedExpId, setSelectedExpId] = useState<string | null>(
     new URLSearchParams(window.location.search).get('experiment') || null
   );
 
-  useEffect(() => { if (!selectedExpId && experiments) setSelectedExpId(experiments.find(e => e.state === 'COMPLETED')?.id ?? null); }, [experiments, selectedExpId]);
+  useEffect(() => { if (!selectedExpId && experiments) setSelectedExpId(experiments.find(e => e.state === 'COMPLETED' || e.state === 'ABORTED')?.id ?? null); }, [experiments, selectedExpId]);
   const { data: report, isLoading, error } = useExperimentReport(selectedExpId);
 
   return (
@@ -27,16 +27,16 @@ export const ReportsPage: React.FC = () => {
         </p>
       </div>
 
-      {completedExperiments.length === 0 ? (
+      {reportableExperiments.length === 0 ? (
         <div
           className="flex h-64 flex-col items-center justify-center gap-3 rounded text-center"
           style={{ border: '1px solid #30363d', backgroundColor: '#161b22' }}
         >
           <FileSpreadsheet className="h-8 w-8" style={{ color: '#30363d' }} />
           <div>
-            <p className="text-xs font-semibold" style={{ color: '#8b949e' }}>No completed experiments available yet</p>
+            <p className="text-xs font-semibold" style={{ color: '#8b949e' }}>No experiment reports available yet</p>
             <p className="mt-1 text-[11px]" style={{ color: '#6e7681' }}>
-              Run an experiment to completion to generate a capacity and recovery report.
+              Completed and aborted experiments both include reports.
             </p>
           </div>
         </div>
@@ -46,11 +46,11 @@ export const ReportsPage: React.FC = () => {
           <div className="lg:col-span-1">
             <div className="mb-2">
               <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: '#6e7681' }}>
-                Completed Runs
+                Reports
               </span>
             </div>
             <div className="space-y-1">
-              {completedExperiments.map((exp) => (
+              {reportableExperiments.map((exp) => (
                 <button
                   key={exp.id}
                   onClick={() => setSelectedExpId(exp.id)}
@@ -69,7 +69,7 @@ export const ReportsPage: React.FC = () => {
                         }
                   }
                 >
-                  <div className="font-semibold">{exp.target_service}</div>
+                  <div className="font-semibold">{exp.target_service} <span className="font-normal">· {exp.state.toLowerCase()}</span></div>
                   <div className="mt-0.5 font-mono text-[10px] truncate" style={{ color: '#6e7681' }}>
                     {exp.id}
                   </div>

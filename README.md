@@ -63,6 +63,20 @@ To stop the target environment:
 docker compose down
 ```
 
+### Directly targeting a service
+
+Jaeger provides service names, not callable URLs. To prefill direct targets in the experiment form, set `SERVICE_TARGET_URLS` in `.env` to a JSON map keyed by the exact telemetry service name, for example:
+
+```dotenv
+SERVICE_TARGET_URLS={"frontend":"http://frontend:8080/","my-http-service":"http://my-http-service:8080/test"}
+```
+
+The default Compose stack includes an internal `otel-demo-http-gateway` that translates JSON HTTP calls into the OTel Demo's gRPC methods and forwards its HTTP-only quote/email operations. Example direct targets include `http://otel-demo-http-gateway:8090/v1/CurrencyService/Convert` and `http://otel-demo-http-gateway:8090/v1/CheckoutService/PlaceOrder`. These URLs are reachable only inside the Compose network by default.
+
+The dependency graph returns configured URLs and selecting a service pre-fills its target. On the experiment detail page, choose GET or POST and, for POST, provide the protobuf-JSON request body. GET adapter requests can carry a JSON body in a URL-encoded `request` query parameter; the sample `.env.example` provides repeatable read-only defaults. The gateway refuses GET for state-changing operations such as cart updates, shipping orders, charges, checkout, and email. POST bodies are replayed for every scheduled request and can mutate demo data or create simulated transactions, so use a disposable test environment. The UI asks for confirmation before starting any POST plan.
+
+For example, to load-test currency conversion directly, select `currencyservice`; the default URL targets `CurrencyService.Convert`. To customize the operation, set the method to POST and use a body such as `{"from":{"currencyCode":"USD","units":1},"toCode":"EUR"}`. To load-test checkout, select `checkoutservice`, choose POST, and provide the demo's `PlaceOrder` request JSON (user, address, email, and test card). Each generated request repeats that body, so checkout can create multiple demo orders.
+
 ---
 
 ## 📚 Project Documentation

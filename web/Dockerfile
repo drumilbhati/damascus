@@ -22,7 +22,7 @@ FROM nginx:alpine
 
 # Default configuration environment variables
 ENV PORT=80
-ENV BACKEND_URL=http://localhost:8080/api/
+ENV BACKEND_URL=http://localhost:8080
 ENV NGINX_ENVSUBST_FILTER="^(BACKEND_URL|PORT)$"
 
 # Copy custom nginx configuration template for runtime envsubst

@@ -30,6 +30,27 @@ type ClientConfig struct {
 	RequestTimeout time.Duration
 }
 
+// NewLoadHTTPClient creates a reusable HTTP client for the stress engine.
+// Its per-host idle and total connection limits are aligned with maxInFlight,
+// preventing the default two-idle-connection pool from churning TCP sockets
+// during high-rate runs. A non-positive maxInFlight uses the engine default.
+func NewLoadHTTPClient(maxInFlight int, timeout time.Duration) *http.Client {
+	if maxInFlight < 1 {
+		maxInFlight = 256
+	}
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = maxInFlight
+	transport.MaxIdleConnsPerHost = maxInFlight
+	transport.MaxConnsPerHost = maxInFlight
+	transport.IdleConnTimeout = 90 * time.Second
+
+	return &http.Client{Transport: transport, Timeout: timeout}
+}
+
 // defaultClientConfig returns a ClientConfig populated with production-grade
 // defaults tuned for high-throughput load generation.
 func defaultClientConfig() ClientConfig {

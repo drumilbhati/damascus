@@ -85,6 +85,18 @@ Modern cloud-native architectures comprise complex networks of distributed micro
 
 ## 3. Core Architectural Principles
 
+### Direct service targets
+
+Jaeger discovers telemetry service names and dependencies, not callable endpoints. Set the optional `SERVICE_TARGET_URLS` environment variable to a JSON object mapping exact telemetry service names to HTTP(S) URLs, for example:
+
+```dotenv
+SERVICE_TARGET_URLS={"frontend":"http://frontend:8080/","my-http-service":"http://my-http-service:8080/test"}
+```
+
+The URLs are returned with dependency data and automatically populated when selecting a service in the experiment form. They must be reachable from the `damascus-control-plane` container (Docker DNS names work on the shared Compose network). The URL must point to an application route that accepts the selected HTTP method and payload; this mapping does not discover routes or synthesize request bodies. The URL remains editable, and unmapped services can still be tested by entering a URL manually. The current stress engine supports HTTP GET/POST only.
+
+The root Compose stack supplies `otel-demo-http-gateway` as that adapter for the pinned OTel Demo. It exposes JSON-over-HTTP routes under `/v1/{Service}/{Method}` and invokes the corresponding gRPC method on the named demo service. Quote and email calls are forwarded to their existing HTTP endpoints. GET requests may pass a URL-encoded JSON object in the `request` query parameter; POST requests send protobuf-JSON in the body. State-changing operations reject GET and require POST. The experiment detail screen can set the method and body; POST is replayed per generated request and prompts for confirmation because it may mutate carts, create orders, or trigger simulated payments/emails.
+
 ### 3.1 Observability Decoupling & Target Flexibility
 DAMASCUS does not require embedding invasive agents or proprietary SDKs inside target microservices. It connects directly to standard cloud observability backends:
 - **Distributed Tracing**: Ingested via standard Jaeger HTTP API (`/api/traces`) or OpenTelemetry collector exporters.
@@ -243,4 +255,3 @@ docker compose up -d
 - **Jaeger Tracing Console**: `http://localhost:16686`
 - **Prometheus Console**: `http://localhost:9090`
 - **Astronomy Shop Frontend**: `http://localhost:8085`
-

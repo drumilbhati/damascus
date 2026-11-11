@@ -75,6 +75,7 @@ export interface ServiceScore {
 export interface DependenciesResponse {
   graph: DependencyGraph;
   scores: ServiceScore[];
+  target_urls?: Record<string, string>;
 }
 
 export interface HealthStatus {
@@ -151,7 +152,7 @@ export interface CreateExperimentPayload {
 export interface StartExperimentPayload {
   plan?: {
     target_url?: string;
-    method?: string;
+    method?: 'GET' | 'POST';
     initial_rate?: number;
     step_rate?: number;
     max_rate?: number;
