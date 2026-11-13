@@ -96,7 +96,7 @@ The technical specifications and architectural designs are structured into modul
 | :--- | :--- |
 | **`GraphAnalyser`** | Ingests Jaeger distributed traces, constructs topology graphs, and scores service criticality ($S(v)$). |
 | **`ExperimentManager`** | Orchestrates the 8-state experiment lifecycle (`CREATED` $\rightarrow$ `RUNNING` $\rightarrow$ `COMPLETED`). |
-| **`StressEngine`** | Spawns goroutine worker pools to generate stepped and ramp HTTP/gRPC traffic. |
+| **`StressEngine`** | Generates stepped or fixed-rate HTTP traffic; gRPC services can be exercised through an HTTP gateway. |
 | **`WatcherEngine`** | Polls Prometheus at 1-second intervals for real-time RED metrics (Rate, Errors, Latency P50/P95/P99). |
 | **`SafetyController`** | Evaluates observations against SLA limits and triggers fast-path in-memory `context.Context` aborts. |
 | **`CapacityAnalyzer`** | Computes maximum sustainable rate, degradation knee, and post-stress recovery time. |
@@ -105,6 +105,17 @@ The technical specifications and architectural designs are structured into modul
 | **`PostgreSQL`** | Persists experiments, dependencies, observations, and capacity reports. |
 
 ---
+
+## Load strategies in the UI
+
+As of November 13, 2026, the New Experiment form offers:
+
+- **Step (default):** Hold the initial RPS for the step duration, increase by the configured increment, and repeat up to the maximum RPS.
+- **Fixed:** Hold one target RPS for the run duration. The form shows only the fixed rate and duration; the API normalizes `max_rate` to `initial_rate` and `step_rate` to zero before validating the configuration.
+
+**Ramp is temporarily hidden from the creation dropdown** because it currently uses the same stepped scheduler as Step. Existing ramp records remain visible, and the backend still accepts `ramp` for compatibility. Restore the UI option only once a distinct time-based ramp scheduler and its strategy-specific inputs are implemented.
+
+Rates are offered targets, not measured throughput. Capacity estimates require at least 30 seconds of valid observations at a constant load level; use hold/run durations longer than 30 seconds to allow for sampling.
 
 ## 📁 Repository Structure
 

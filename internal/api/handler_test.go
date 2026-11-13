@@ -181,6 +181,25 @@ func TestHandler_CreateExperiment(t *testing.T) {
 			wantStatus: http.StatusCreated,
 		},
 		{
+			name: "fixed rate normalizes hidden ramp fields before validation",
+			dto: CreateExperimentDTO{
+				TargetService: "catalog",
+				TargetURL:     "http://catalog:8080",
+				Type:          experiment.ExperimentFixed,
+				Config: experiment.ExperimentConfig{
+					InitialRate: 1000, MaxRate: 5, StepRate: 1, StepDurationSeconds: 40,
+					MaxP95LatencyMs: 1000, MaxErrorRatePercent: 5, MinAvailabilityPct: 95,
+				},
+			},
+			serviceFn: func(ctx context.Context, targetService, targetURL string, expType experiment.ExperimentType, config experiment.ExperimentConfig) (*experiment.Experiment, error) {
+				if config.InitialRate != 1000 || config.MaxRate != 1000 || config.StepRate != 0 || config.StepDurationSeconds != 40 {
+					t.Fatalf("incorrect fixed configuration: %+v", config)
+				}
+				return &experiment.Experiment{ID: "exp-123", Type: expType, Config: config}, nil
+			},
+			wantStatus: http.StatusCreated,
+		},
+		{
 			name: "missing target service",
 			dto: CreateExperimentDTO{
 				TargetService: "",

@@ -25,6 +25,7 @@ type ExperimentType string
 const (
 	ExperimentRamp ExperimentType = "ramp"
 	ExperimentStep ExperimentType = "step"
+	ExperimentFixed ExperimentType = "fixed"
 )
 
 // ExperimentConfig defines the execution parameters and safety thresholds.

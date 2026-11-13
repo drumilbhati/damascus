@@ -47,7 +47,7 @@ export const ExperimentsPage: React.FC = () => {
     }
   }
 
-  const [expType, setExpType] = useState<ExperimentType>('ramp');
+  const [expType, setExpType] = useState<ExperimentType>('step');
   const [config, setConfig] = useState<ExperimentConfig>({
     initial_rate: 1,
     step_rate: 1,
@@ -116,7 +116,10 @@ export const ExperimentsPage: React.FC = () => {
     setFormError(null);
     setIsSubmitting(true);
     try {
-      await createExperiment({ target_service: effectiveTargetService, target_url: targetURL, type: expType, config });
+      const loadConfig = expType === 'fixed'
+        ? { ...config, max_rate: config.initial_rate, step_rate: 0 }
+        : config;
+      await createExperiment({ target_service: effectiveTargetService, target_url: targetURL, type: expType, config: loadConfig });
       handleCloseModal();
       mutate();
     } catch (err: any) {
@@ -195,7 +198,7 @@ export const ExperimentsPage: React.FC = () => {
                   >
                     <td className="px-4 py-2.5">
                       <div className="font-medium" style={{ color: '#e6edf3' }}>{exp.target_service}</div>
-                      <div className="font-mono text-[10px]" style={{ color: '#6e7681' }}>{exp.target_url}</div>
+                      <div className="font-mono text-[10px] break-all" style={{ color: '#6e7681' }}>{exp.target_url}</div>
                     </td>
                     <td className="px-4 py-2.5">
                       <span className="rounded px-1.5 py-0.5 font-mono text-[10px]" style={{ backgroundColor: '#21262d', color: '#8b949e' }}>
@@ -385,17 +388,21 @@ export const ExperimentsPage: React.FC = () => {
               <div>
                 <label className="block text-[11px] font-semibold mb-1" style={{ color: '#8b949e' }}>Strategy</label>
                 <select className={inputCls} style={inputStyle} value={expType} onChange={(e) => setExpType(e.target.value as ExperimentType)}>
-                  <option value="ramp">ramp — linearly increase load step by step</option>
-                  <option value="step">step — increase load at each configured interval</option>
+                  <option value="step">step — hold each load level before increasing</option>
+                  <option value="fixed">fixed — hold one request rate</option>
                 </select>
               </div>
 
               <div className="text-[10px] font-semibold uppercase tracking-widest pt-1" style={{ color: '#6e7681' }}>Rate Config (RPS)</div>
-              <div className="grid grid-cols-3 gap-3">
+              <div className={`grid gap-3 ${expType === 'fixed' ? 'grid-cols-1' : 'grid-cols-3'}`}>
                 {[
-                  { label: 'Initial', key: 'initial_rate' },
-                  { label: 'Step', key: 'step_rate' },
-                  { label: 'Max', key: 'max_rate' },
+                  ...(expType === 'fixed'
+                    ? [{ label: 'Fixed rate', key: 'initial_rate' }]
+                    : [
+                        { label: 'Initial', key: 'initial_rate' },
+                        { label: 'Step', key: 'step_rate' },
+                        { label: 'Max', key: 'max_rate' },
+                      ]),
                 ].map(({ label, key }) => (
                   <div key={key}>
                     <label className="block text-[11px] mb-1" style={{ color: '#8b949e' }}>{label}</label>
@@ -409,7 +416,7 @@ export const ExperimentsPage: React.FC = () => {
 
               <div className="text-[10px] font-semibold uppercase tracking-widest pt-1" style={{ color: '#6e7681' }}>SLA Thresholds</div>
               <div>
-                <label className="block text-[11px] mb-1" style={{ color: '#8b949e' }}>Step Duration (seconds)</label>
+                  <label className="block text-[11px] mb-1" style={{ color: '#8b949e' }}>{expType === 'fixed' ? 'Run Duration (seconds)' : 'Step Duration (seconds)'}</label>
                 <input type="number" min="1" required className={inputCls} style={inputStyle}
                   value={config.step_duration_seconds}
                   onChange={(e) => setConfig({ ...config, step_duration_seconds: Number(e.target.value) })}

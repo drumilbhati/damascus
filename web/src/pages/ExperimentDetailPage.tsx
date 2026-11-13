@@ -350,26 +350,37 @@ export const ExperimentDetailPage: React.FC = () => {
                 {experiment.type}
               </dd>
             </div>
+            {experiment.type === 'fixed' ? (
+              <div>
+                <dt style={{ color: '#8b949e' }}>Fixed Rate</dt>
+                <dd className="mt-0.5 font-mono font-semibold" style={{ color: '#e6edf3' }}>
+                  {experiment.config.initial_rate} req/s
+                </dd>
+              </div>
+            ) : (
+              <>
+                <div>
+                  <dt style={{ color: '#8b949e' }}>Initial RPS</dt>
+                  <dd className="mt-0.5 font-mono font-semibold" style={{ color: '#e6edf3' }}>
+                    {experiment.config.initial_rate} req/s
+                  </dd>
+                </div>
+                <div>
+                  <dt style={{ color: '#8b949e' }}>Max Ceiling</dt>
+                  <dd className="mt-0.5 font-mono font-semibold" style={{ color: '#e6edf3' }}>
+                    {experiment.config.max_rate} req/s
+                  </dd>
+                </div>
+                <div>
+                  <dt style={{ color: '#8b949e' }}>Step Rate Increment</dt>
+                  <dd className="mt-0.5 font-mono font-semibold" style={{ color: '#e6edf3' }}>
+                    +{experiment.config.step_rate} req/s
+                  </dd>
+                </div>
+              </>
+            )}
             <div>
-              <dt style={{ color: '#8b949e' }}>Initial RPS</dt>
-              <dd className="mt-0.5 font-mono font-semibold" style={{ color: '#e6edf3' }}>
-                {experiment.config.initial_rate} req/s
-              </dd>
-            </div>
-            <div>
-              <dt style={{ color: '#8b949e' }}>Max Ceiling</dt>
-              <dd className="mt-0.5 font-mono font-semibold" style={{ color: '#e6edf3' }}>
-                {experiment.config.max_rate} req/s
-              </dd>
-            </div>
-            <div>
-              <dt style={{ color: '#8b949e' }}>Step Rate Increment</dt>
-              <dd className="mt-0.5 font-mono font-semibold" style={{ color: '#e6edf3' }}>
-                +{experiment.config.step_rate} req/s
-              </dd>
-            </div>
-            <div>
-              <dt style={{ color: '#8b949e' }}>Step Duration</dt>
+              <dt style={{ color: '#8b949e' }}>{experiment.type === 'fixed' ? 'Run Duration' : 'Step Duration'}</dt>
               <dd className="mt-0.5 font-mono font-semibold" style={{ color: '#e6edf3' }}>
                 {experiment.config.step_duration_seconds}s
               </dd>

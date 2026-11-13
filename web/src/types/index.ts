@@ -8,7 +8,7 @@ export type ExperimentState =
   | 'COMPLETED'
   | 'ABORTED';
 
-export type ExperimentType = 'ramp' | 'step';
+export type ExperimentType = 'ramp' | 'step' | 'fixed';
 
 export interface ExperimentConfig {
   initial_rate: number;

@@ -110,7 +110,13 @@ func (m *Manager) CreateExperiment(ctx context.Context, targetService, targetURL
 		return nil, fmt.Errorf("targetService and targetURL must be provided")
 	}
 	if expType != ExperimentRamp && expType != ExperimentStep {
-		return nil, fmt.Errorf("unsupported experiment type %q", expType)
+		if expType != ExperimentFixed {
+			return nil, fmt.Errorf("unsupported experiment type %q", expType)
+		}
+	}
+	if expType == ExperimentFixed {
+		config.StepRate = 0
+		config.MaxRate = config.InitialRate
 	}
 	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid experiment config: %w", err)
@@ -170,6 +176,15 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 	}
 	if exp == nil {
 		return fmt.Errorf("experiment %s was not found", id)
+	}
+	if exp.Type == ExperimentFixed {
+		plan.InitialRate = exp.Config.InitialRate
+		plan.StepRate = 0
+		plan.MaxRate = exp.Config.InitialRate
+		plan.StepDurationSeconds = exp.Config.StepDurationSeconds
+		if err := plan.Validate(); err != nil {
+			return fmt.Errorf("invalid fixed-rate load plan: %w", err)
+		}
 	}
 	if exp.State != StateCreated {
 		return fmt.Errorf("experiment %s is not in StateCreated; current state: %s", id, exp.State)
