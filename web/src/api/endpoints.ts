@@ -8,6 +8,9 @@ import type {
   CreateExperimentPayload,
   StartExperimentPayload,
   StopExperimentPayload,
+  AutoRun,
+  TelemetrySettings,
+  TelemetrySources,
 } from '../types';
 
 export const fetchHealth = async (): Promise<HealthStatus> => {
@@ -57,5 +60,16 @@ export const startExperiment = async (id: string, payload?: StartExperimentPaylo
 
 export const stopExperiment = async (id: string, payload?: StopExperimentPayload): Promise<{ status: string }> => {
   const res = await apiClient.post<{ status: string }>(`/experiments/${id}/stop`, payload || {});
+  return res.data;
+};
+
+export const startAutoRun = async (): Promise<AutoRun> => {
+  const res = await apiClient.post<AutoRun>('/autoruns', {});
+  return res.data;
+};
+
+export const updateTelemetrySettings = async (sources: TelemetrySources): Promise<TelemetrySettings> => {
+  // The backend probes both URLs before applying them, up to five seconds each.
+  const res = await apiClient.put<TelemetrySettings>('/settings/telemetry', sources, { timeout: 20000 });
   return res.data;
 };

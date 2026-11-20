@@ -45,6 +45,12 @@ func NewRouter(h *Handler, opts ...RouterOption) http.Handler {
 	mux.HandleFunc("GET /api/services", h.GetServices)
 	mux.HandleFunc("GET /api/experiments/{id}/report", h.GetExperimentReport)
 	mux.HandleFunc("GET /api/health", h.GetHealth)
+	mux.HandleFunc("GET /api/endpoints", h.GetEndpoints)
+	mux.HandleFunc("GET /api/settings/telemetry", h.GetTelemetrySettings)
+	mux.HandleFunc("PUT /api/settings/telemetry", h.UpdateTelemetrySettings)
+	mux.HandleFunc("POST /api/autoruns", h.StartAutoRun)
+	mux.HandleFunc("GET /api/autoruns", h.ListAutoRuns)
+	mux.HandleFunc("GET /api/autoruns/{id}", h.GetAutoRun)
 
 	// Middleware execution hierarchy:
 	// loggingMiddleware (outermost) wraps recoveryMiddleware, ensuring request duration

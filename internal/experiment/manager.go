@@ -323,6 +323,13 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 	return nil
 }
 
+// HasActiveRun reports whether an experiment currently holds the shared engines.
+func (m *Manager) HasActiveRun() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.activeRuns) > 0
+}
+
 func (m *Manager) StopExperiment(ctx context.Context, id, reason string) error {
 	m.mu.Lock()
 	cancel, ok := m.activeRuns[id]

@@ -168,3 +168,90 @@ export interface StopExperimentPayload {
 export interface ServicesResponse {
   services: string[];
 }
+
+// ---------------------------------------------------------------------------
+// Auto-run pipeline: tagged traffic -> trace analysis -> bottleneck -> tests
+// ---------------------------------------------------------------------------
+export interface RequestSpec {
+  name: string;
+  service?: string;
+  method: 'GET' | 'POST';
+  url: string;
+  headers?: Record<string, string>;
+  body?: string;
+  weight?: number;
+  allow_mutation?: boolean;
+}
+
+export interface ServiceBottleneck {
+  service: string;
+  baseline_critical_ms: number;
+  load_critical_ms: number;
+  inflation: number;
+  critical_share: number;
+  self_load_ms: number;
+  error_rate: number;
+  structural: number;
+  score: number;
+  requests: string[];
+  reasons: string[];
+}
+
+export interface BottleneckReport {
+  bottleneck: string;
+  services: ServiceBottleneck[];
+  baseline_traces: number;
+  load_traces: number;
+  entry_services: Record<string, string>;
+  reachability: Record<string, string[]>;
+}
+
+export type AutoRunState = 'PENDING' | 'DISCOVERING' | 'ANALYZING' | 'TESTING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+
+export interface AutoRunExperiment {
+  request: string;
+  method: string;
+  url: string;
+  target_service: string;
+  experiment_id?: string;
+  state?: ExperimentState;
+  stop_reason?: string;
+  error?: string;
+}
+
+export interface AutoRun {
+  id: string;
+  state: AutoRunState;
+  phase?: string;
+  error?: string;
+  started_at: string;
+  ended_at?: string;
+  requests: RequestSpec[];
+  skipped?: string[];
+  report?: BottleneckReport;
+  experiments: AutoRunExperiment[];
+}
+
+export interface AutoRunsResponse {
+  runs: AutoRun[];
+}
+
+export interface EndpointsResponse {
+  requests: RequestSpec[];
+}
+
+// Telemetry sources: the two APIs Damascus reads (Jaeger traces, Prometheus metrics)
+export interface TelemetrySources {
+  jaeger_url: string;
+  prometheus_url: string;
+}
+
+export interface TelemetrySettings extends TelemetrySources {
+  origin: 'env' | 'ui';
+  updated_at?: string;
+}
+
+export interface TelemetryErrorResponse {
+  error: string;
+  fields?: Partial<Record<keyof TelemetrySources, string>>;
+}

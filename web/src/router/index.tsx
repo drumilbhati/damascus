@@ -6,6 +6,7 @@ import { ExperimentDetailPage } from '../pages/ExperimentDetailPage';
 import { DependenciesPage } from '../pages/DependenciesPage';
 import { ReportsPage } from '../pages/ReportsPage';
 import { NotFoundPage } from '../pages/NotFoundPage';
+import { AutoRunPage } from '../pages/AutoRunPage';
 
 export const router = createBrowserRouter([
   {
@@ -27,6 +28,10 @@ export const router = createBrowserRouter([
       {
         path: 'experiments/:id',
         element: <ExperimentDetailPage />,
+      },
+      {
+        path: 'autorun',
+        element: <AutoRunPage />,
       },
       {
         path: 'dependencies',

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"damascus/internal/api"
+	"damascus/internal/autorun"
 	"damascus/internal/capacity"
 	"damascus/internal/config"
 	"damascus/internal/experiment"
@@ -23,6 +25,7 @@ import (
 	"damascus/internal/safety"
 	"damascus/internal/storage"
 	"damascus/internal/stress"
+	"damascus/internal/telemetry"
 	"damascus/internal/watcher"
 )
 
@@ -42,7 +45,9 @@ import (
 //   - PROMETHEUS_URL: Base URL for Prometheus query API
 //   - JAEGER_URL: Base URL for Jaeger query API
 //   - KAFKA_BROKERS: Comma-separated Kafka broker addresses
-//   - TARGET_BASE_URL: Base URL for target microservice mesh under test
+//   - TARGET_BASE_URL (optional): health-probe URL for the target; derived from
+//     DAMASCUS_ENDPOINTS when unset. The only target-side inputs Damascus needs
+//     are the Jaeger and Prometheus APIs plus the developer's request specs.
 // ============================================================================
 
 // Config holds runtime configuration options for the DAMASCUS control plane.
@@ -57,7 +62,7 @@ type Config struct {
 
 // LoadConfig reads configuration settings directly from system environment variables.
 // It verifies that all required variables (PORT, POSTGRES_DSN, PROMETHEUS_URL,
-// JAEGER_URL, KAFKA_BROKERS, and TARGET_BASE_URL) are set to non-empty values.
+// JAEGER_URL, and KAFKA_BROKERS) are set to non-empty values. TARGET_BASE_URL is optional.
 // If any required variable is missing or blank, LoadConfig returns an error
 // detailing the missing parameters.
 func LoadConfig() (Config, error) {
@@ -85,9 +90,6 @@ func LoadConfig() (Config, error) {
 	}
 	if cfg.KafkaBrokers == "" {
 		missing = append(missing, "KAFKA_BROKERS")
-	}
-	if cfg.TargetBaseURL == "" {
-		missing = append(missing, "TARGET_BASE_URL")
 	}
 
 	if len(missing) > 0 {
@@ -125,6 +127,7 @@ func LoadConfig() (Config, error) {
 type healthCheckerAdapter struct {
 	checker *observability.Checker
 	cfg     config.EnvironmentConfig
+	sources *telemetry.Store // when set, Jaeger/Prometheus URLs follow runtime changes
 }
 
 // CheckHealth queries the downstream observability stack (Target service mesh,
@@ -132,7 +135,12 @@ type healthCheckerAdapter struct {
 // to health status strings. In case of probe failures or errors, it retains
 // individual component availability statuses and returns a non-nil error.
 func (a *healthCheckerAdapter) CheckHealth(ctx context.Context) (map[string]string, error) {
-	status, err := a.checker.CheckObservabilityStack(ctx, a.cfg)
+	cfg := a.cfg
+	if a.sources != nil {
+		current := a.sources.Get()
+		cfg.JaegerTraceBaseURL, cfg.PrometheusBaseURL = current.JaegerURL, current.PrometheusURL
+	}
+	status, err := a.checker.CheckObservabilityStack(ctx, cfg)
 	if err != nil {
 		targetStatus := "UNREACHABLE"
 		jaegerStatus := "UNREACHABLE"
@@ -226,6 +234,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	requestSpecs, err := config.LoadRequestSpecs(os.Getenv("DAMASCUS_ENDPOINTS"), os.Getenv("DAMASCUS_ENDPOINTS_FILE"))
+	if err != nil {
+		return err
+	}
+	if cfg.TargetBaseURL == "" && len(requestSpecs) > 0 {
+		if u, parseErr := url.Parse(requestSpecs[0].SampleURL()); parseErr == nil {
+			cfg.TargetBaseURL = u.Scheme + "://" + u.Host + "/"
+		}
+	}
 	stressEngine := stress.NewEngine(stress.NewLoadHTTPClient(maxInFlight, 10*time.Second), stress.WithMaxInFlight(maxInFlight))
 
 	var watcherEngine experiment.Watcher
@@ -233,7 +250,8 @@ func run() error {
 	if promErr != nil {
 		logger.Warn("failed to initialize prometheus client; metrics polling disabled", "error", promErr)
 	} else {
-		watcherEngine = watcher.NewWatcherEngine(promClient, nil)
+		// Discover metric names/labels for services the built-in queries do not know.
+		watcherEngine = watcher.NewWatcherEngine(promClient.EnableMetricDiscovery(), nil)
 	}
 
 	safetyController := safety.NewController(logger)
@@ -253,9 +271,35 @@ func run() error {
 	)
 	defer manager.Shutdown()
 
+	autoCfg, err := autorun.ConfigFromEnv(os.Getenv, requestSpecs)
+	if err != nil {
+		return err
+	}
+	orchestrator := autorun.NewOrchestrator(autoCfg, stressEngine, graphAnalyzer, manager, logger)
+	defer orchestrator.Shutdown()
+	// Jaeger and Prometheus start from .env and can be changed from the UI.
+	var promTarget telemetry.PrometheusTarget
+	if promClient != nil {
+		promTarget = promClient
+	}
+	telemetrySources := telemetry.NewStore(
+		telemetry.Sources{JaegerURL: cfg.JaegerURL, PrometheusURL: cfg.PrometheusURL},
+		graphAnalyzer, promTarget, nil,
+		func() bool { return manager.HasActiveRun() || orchestrator.Running() },
+	)
+
+	if enabled, _ := strconv.ParseBool(strings.TrimSpace(os.Getenv("AUTO_RUN"))); enabled {
+		if run, startErr := orchestrator.Start(context.Background(), autoCfg.StartDelay); startErr != nil {
+			logger.Warn("AUTO_RUN is enabled but the pipeline could not start", "error", startErr)
+		} else {
+			logger.Info("auto-run scheduled", "run_id", run.ID, "requests", len(requestSpecs), "delay", autoCfg.StartDelay.String())
+		}
+	}
+
 	// 5. Build REST API handler and routes
 	healthChecker := &healthCheckerAdapter{
 		checker: checker,
+		sources: telemetrySources,
 		cfg: config.EnvironmentConfig{
 			TargetBaseURL:      cfg.TargetBaseURL,
 			JaegerTraceBaseURL: cfg.JaegerURL,
@@ -270,6 +314,8 @@ func run() error {
 		api.WithReportEngine(reportEngine),
 		api.WithObservabilityChecker(healthChecker),
 		api.WithServiceTargetURLs(serviceTargetURLs),
+		api.WithAutoRun(orchestrator),
+		api.WithTelemetrySettings(telemetrySources),
 	)
 	router := api.NewRouter(handler)
 

@@ -126,6 +126,8 @@ type Handler struct {
 	reportEngine      reportpkg.ReportEngine
 	logger            *slog.Logger
 	serviceTargetURLs map[string]string
+	autoRun           AutoRunService
+	telemetry         TelemetrySettings
 }
 
 // HandlerOption configures dependencies for Handler.

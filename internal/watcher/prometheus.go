@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/api"
@@ -14,7 +15,40 @@ import (
 
 // PrometheusClient wraps the Prometheus HTTP API v1 client to query RED/USE metrics.
 type PrometheusClient struct {
-	api promv1.API
+	mu       sync.RWMutex
+	api      promv1.API
+	address  string
+	profiles *profileCache // non-nil when metric discovery is enabled
+}
+
+// promAPI returns the API client currently in use.
+func (c *PrometheusClient) promAPI() promv1.API {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.api
+}
+
+// Address returns the Prometheus server URL currently in use.
+func (c *PrometheusClient) Address() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.address
+}
+
+// SetAddress points subsequent queries at another Prometheus server and
+// forgets metric profiles discovered on the previous one.
+func (c *PrometheusClient) SetAddress(address string) error {
+	client, err := api.NewClient(api.Config{Address: address})
+	if err != nil {
+		return fmt.Errorf("failed to create prometheus client: %w", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.api, c.address = promv1.NewAPI(client), address
+	if c.profiles != nil {
+		c.profiles = newProfileCache()
+	}
+	return nil
 }
 
 var errNoTelemetry = errors.New("no telemetry samples for the selected service; check metric export and traffic reaching that service")
@@ -29,7 +63,8 @@ func NewPrometheusClient(address string) (*PrometheusClient, error) {
 	}
 
 	return &PrometheusClient{
-		api: promv1.NewAPI(client),
+		api:     promv1.NewAPI(client),
+		address: address,
 	}, nil
 }
 
@@ -101,7 +136,7 @@ func ExtractFloatValue(val model.Value) (float64, error) {
 
 // QueryValue executes a PromQL query at the current time and extracts a single scalar float64.
 func (c *PrometheusClient) QueryValue(ctx context.Context, query string) (float64, error) {
-	result, _, err := c.api.Query(ctx, query, time.Now())
+	result, _, err := c.promAPI().Query(ctx, query, time.Now())
 	if err != nil {
 		return 0.0, fmt.Errorf("promql query failed: %w", err)
 	}
@@ -112,7 +147,7 @@ func (c *PrometheusClient) QueryValue(ctx context.Context, query string) (float6
 // queryRequired distinguishes missing telemetry from a measured zero.
 func (c *PrometheusClient) queryRequired(ctx context.Context, queries ...string) (float64, error) {
 	for _, query := range queries {
-		result, _, err := c.api.Query(ctx, query, time.Now())
+		result, _, err := c.promAPI().Query(ctx, query, time.Now())
 		if err != nil {
 			return 0, fmt.Errorf("promql query failed: %w", err)
 		}
@@ -164,6 +199,19 @@ func (c *PrometheusClient) querySpanSnapshot(ctx context.Context, snapshot Metri
 // - Availability: Calculated as (1.0 - ErrorRate). If ErrorRate >= 1.0, Availability = 0.0.
 // - RequestRate: Requests per second.
 func (c *PrometheusClient) QuerySnapshot(ctx context.Context, experimentID, targetService string) (MetricSnapshot, error) {
+	snapshot, err := c.queryBuiltinSnapshot(ctx, experimentID, targetService)
+	if err != nil && errors.Is(err, errNoTelemetry) && c.discoveryEnabled() && targetService != "" {
+		// Unknown service: use whatever latency histogram Prometheus has for it.
+		if discovered, discErr := c.queryDiscovered(ctx, snapshot); discErr == nil {
+			return discovered, nil
+		}
+	}
+	return snapshot, err
+}
+
+// queryBuiltinSnapshot uses the well-known metric names (Prometheus client
+// conventions, OTel demo exporters, and Collector span metrics).
+func (c *PrometheusClient) queryBuiltinSnapshot(ctx context.Context, experimentID, targetService string) (MetricSnapshot, error) {
 	snapshot := MetricSnapshot{
 		ExperimentID:  experimentID,
 		TargetService: targetService,

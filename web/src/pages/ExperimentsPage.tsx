@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useExperiments, useDependencies } from '../api/hooks';
 import { createExperiment } from '../api/endpoints';
+import { TelemetrySourcesPanel } from '../components/TelemetrySourcesPanel';
 import type { ExperimentType, ExperimentConfig } from '../types';
 import { FlaskConical, Plus, ArrowRight, X, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 
@@ -32,6 +33,7 @@ export const ExperimentsPage: React.FC = () => {
   const [showModal, setShowModal] = useState(Boolean(targetParam));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [telemetryDirty, setTelemetryDirty] = useState(false);
 
   // An explicit user choice overrides the current score recommendation.
   const [targetURL, setTargetURL] = useState('');
@@ -105,6 +107,10 @@ export const ExperimentsPage: React.FC = () => {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (telemetryDirty) {
+      setFormError('Click "Test & connect" to apply the Jaeger and Prometheus sources first, or revert them');
+      return;
+    }
     if (!effectiveTargetService) {
       setFormError('Please select a target service');
       return;
@@ -243,6 +249,15 @@ export const ExperimentsPage: React.FC = () => {
                   {formError}
                 </div>
               )}
+
+              {/* Step 0: the two telemetry APIs (Jaeger traces, Prometheus metrics) */}
+              <TelemetrySourcesPanel
+                onDirtyChange={setTelemetryDirty}
+                onApplied={() => {
+                  setTargetService('');
+                  void refetchServices();
+                }}
+              />
 
               {/* Step 1: Target URL */}
               <div>

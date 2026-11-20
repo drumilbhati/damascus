@@ -8,6 +8,9 @@ import type {
   HealthStatus,
   ExperimentReport,
   ServicesResponse,
+  AutoRunsResponse,
+  EndpointsResponse,
+  TelemetrySettings,
 } from '../types';
 
 export const useHealth = (refreshInterval = 15000) => {
@@ -76,4 +79,29 @@ export const useServices = (enabled = false) => {
       shouldRetryOnError: false,
     }
   );
+};
+
+const ACTIVE_AUTORUN_STATES = ['PENDING', 'DISCOVERING', 'ANALYZING', 'TESTING'];
+
+// Polls quickly while a run is active so phase changes show up promptly.
+export const useAutoRuns = () => {
+  return useSWR<AutoRunsResponse>('/autoruns', defaultFetcher, {
+    refreshInterval: (data) =>
+      data?.runs?.some((r) => ACTIVE_AUTORUN_STATES.includes(r.state)) ? 2000 : 15000,
+    shouldRetryOnError: false,
+  });
+};
+
+export const useConfiguredEndpoints = () => {
+  return useSWR<EndpointsResponse>('/endpoints', defaultFetcher, {
+    revalidateOnFocus: false,
+    shouldRetryOnError: false,
+  });
+};
+
+export const useTelemetrySettings = () => {
+  return useSWR<TelemetrySettings>('/settings/telemetry', defaultFetcher, {
+    revalidateOnFocus: false,
+    shouldRetryOnError: false,
+  });
 };

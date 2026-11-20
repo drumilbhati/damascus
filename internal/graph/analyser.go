@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,10 +23,18 @@ type jaegerTrace struct {
 }
 
 type jaegerSpan struct {
-	SpanID     string            `json:"spanID"`
-	ProcessID  string            `json:"processID"`
-	References []jaegerReference `json:"references"`
-	Duration   int64             `json:"duration"` // Microseconds
+	SpanID        string            `json:"spanID"`
+	OperationName string            `json:"operationName"`
+	ProcessID     string            `json:"processID"`
+	References    []jaegerReference `json:"references"`
+	StartTime     int64             `json:"startTime"` // Microseconds since epoch
+	Duration      int64             `json:"duration"`  // Microseconds
+	Tags          []jaegerTag       `json:"tags"`
+}
+
+type jaegerTag struct {
+	Key   string `json:"key"`
+	Value any    `json:"value"`
 }
 
 type jaegerReference struct {
@@ -44,8 +53,23 @@ type jaegerServicesResponse struct {
 
 // Analyzer implements the interfaces.GraphAnalyzer contract.
 type Analyzer struct {
+	mu            sync.RWMutex
 	jaegerBaseURL string
 	client        *http.Client
+}
+
+// JaegerURL returns the Jaeger query API base URL currently in use.
+func (a *Analyzer) JaegerURL() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.jaegerBaseURL
+}
+
+// SetJaegerURL switches the Jaeger query API used by subsequent calls.
+func (a *Analyzer) SetJaegerURL(baseURL string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.jaegerBaseURL = strings.TrimRight(baseURL, "/")
 }
 
 // NewAnalyzer initializes a new GraphAnalyzer instance.
@@ -65,9 +89,10 @@ func (a *Analyzer) BuildGraph(ctx context.Context, lookbackDuration int64) (*Dep
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 	graph := NewDependencyGraph()
+	jaegerBaseURL := a.JaegerURL()
 
 	// 1. Fetch list of active services from /api/services
-	servicesURL := a.jaegerBaseURL + "/api/services"
+	servicesURL := jaegerBaseURL + "/api/services"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, servicesURL, nil)
 	if err != nil {
 		return nil, err
@@ -109,7 +134,7 @@ func (a *Analyzer) BuildGraph(ctx context.Context, lookbackDuration int64) (*Dep
 		queryParams.Set("limit", "50")
 		queryParams.Set("lookback", lookbackStr)
 
-		traceURL := fmt.Sprintf("%s/api/traces?%s", a.jaegerBaseURL, queryParams.Encode())
+		traceURL := fmt.Sprintf("%s/api/traces?%s", jaegerBaseURL, queryParams.Encode())
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, traceURL, nil)
 		if err != nil {
 			return nil, err

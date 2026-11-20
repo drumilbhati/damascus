@@ -5,6 +5,7 @@ import {
   FlaskConical,
   Network,
   FileSpreadsheet,
+  Bot,
   X,
 } from 'lucide-react';
 import { useExperiments } from '../api/hooks';
@@ -29,6 +30,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
       label: 'Chaos Engineering',
       items: [
         { to: '/experiments', label: 'Experiments', icon: FlaskConical, badge: runningCount > 0 ? runningCount : null },
+        { to: '/autorun', label: 'Auto Run', icon: Bot, badge: null },
       ],
     },
     {

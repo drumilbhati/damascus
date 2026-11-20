@@ -79,6 +79,43 @@ For example, to load-test currency conversion directly, select `currencyservice`
 
 ---
 
+## 🤖 Automatic bottleneck discovery (unknown services)
+
+Damascus can test a service it knows nothing about. It needs only two APIs, **Jaeger** (`JAEGER_URL`) and **Prometheus** (`PROMETHEUS_URL`), plus the requests you put in `.env`.
+
+You can enter the two URLs in the dashboard: there's a **Telemetry sources** panel in the New Experiment dialog and on the Auto Run page. Damascus checks that each one answers like Jaeger (`/api/services`) and Prometheus (`/api/v1/query`) before switching to it. The `.env` values are only the startup defaults. You can't change the sources while an experiment or auto-run is in progress, and a change made in the UI lasts until the control plane restarts. The API is `GET` and `PUT /api/settings/telemetry`.
+
+Example `.env`:
+
+```dotenv
+DAMASCUS_ENDPOINTS='[
+  {"name":"list-items","method":"GET","url":"http://my-svc:8080/items","weight":3},
+  {"name":"create-order","method":"POST","url":"http://my-svc:8080/orders",
+   "headers":{"Authorization":"Bearer test"},
+   "body":{"orderId":"{{uuid}}","qty":1},"allow_mutation":true}
+]'
+AUTO_RUN=true
+```
+
+Each request takes `name`, `method` (GET/POST), `url`, and optionally `headers`, `body`, `weight` and `service`. `{{uuid}}`, `{{seq}}` and `{{timestamp}}` are filled in fresh for every request. For longer lists, mount a file and set `DAMASCUS_ENDPOINTS_FILE`. `TARGET_BASE_URL` is now optional; when unset, it is derived from the first request URL.
+
+The pipeline runs at boot when `AUTO_RUN=true` and on demand with `POST /api/autoruns`. You can follow it on the dashboard's **Auto Run** page or via `GET /api/autoruns/latest`:
+
+1. **Dynamic workers generate tagged traffic.** Damascus sends a low-rate baseline and then a higher probe rate. The worker pool resizes itself using Little's law (`workers ≈ rate × latency × 1.5`), up to `STRESS_MAX_IN_FLIGHT`. Sampled requests carry a W3C `traceparent` header, so Damascus knows the exact trace IDs it created.
+2. **Trace analysis.** Those traces are fetched from Jaeger by ID. Each service gets a critical-path time and a self-time per trace, and baseline is compared with load.
+3. **Bottleneck ranking.** The score combines the service's share of the critical path, how much that time grows under load, and its span error rate. Structural graph criticality is used only as a tiebreaker.
+4. **Automatic tests.** Each request whose traces reach the bottleneck gets its own step experiment (`AUTO_RUN_*_RPS`, `AUTO_RUN_STEP_SECONDS`), observing the bottleneck's metrics. Set `AUTO_RUN_TEST_SCOPE=all` to test every request.
+
+Prometheus metric names are discovered at runtime. If the built-in queries find nothing for a service, Damascus looks for a latency histogram (`*duration*`/`*latency*` with `_bucket` and `_count`). It detects the service label (`service_name`, `service`, `job`, `exported_job`, …), the status label, and the unit.
+
+Safety notes:
+- POST specs run unattended only with `"allow_mutation": true`.
+- Header values are redacted in API responses.
+- The target must propagate `traceparent`, which any OpenTelemetry-instrumented service does.
+- Avoid starting a manual experiment while an auto-run is generating discovery traffic, because they share the load generator.
+
+---
+
 ## 📚 Project Documentation
 
 The technical specifications and architectural designs are structured into modular guides:

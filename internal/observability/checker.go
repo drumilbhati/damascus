@@ -36,7 +36,9 @@ func (c *Checker) CheckObservabilityStack(ctx context.Context, cfg config.Enviro
 	}
 
 	// 1. Probe Target Base URL (accepts 2xx/3xx/4xx, rejects >= 500)
-	if err := c.probeEndpoint(ctx, cfg.TargetBaseURL, false); err != nil {
+	if strings.TrimSpace(cfg.TargetBaseURL) == "" {
+		status.Target = "NOT_CONFIGURED"
+	} else if err := c.probeEndpoint(ctx, cfg.TargetBaseURL, false); err != nil {
 		status.Target = "UNREACHABLE"
 		status.Errors["target"] = err.Error()
 	}
