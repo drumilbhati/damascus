@@ -79,14 +79,28 @@ func ParseRequestSpecs(raw string) ([]stress.RequestSpec, error) {
 }
 
 // LoadRequestSpecs reads specs from DAMASCUS_ENDPOINTS_FILE when set, otherwise
-// from the inline DAMASCUS_ENDPOINTS value.
+// from the inline DAMASCUS_ENDPOINTS value. Both YAML and JSON formats are supported.
 func LoadRequestSpecs(inline, filePath string) ([]stress.RequestSpec, error) {
 	if path := strings.TrimSpace(filePath); path != "" {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read DAMASCUS_ENDPOINTS_FILE: %w", err)
 		}
+		// Try YAML/JSON parser (supports both full file config and bare list)
+		specs, err := ParseYAMLOrJSONRequestSpecs(data)
+		if err == nil {
+			return specs, nil
+		}
+		// Fallback to strict JSON parser for backwards compatibility
 		return ParseRequestSpecs(string(data))
+	}
+
+	if strings.TrimSpace(inline) == "" {
+		return nil, nil
+	}
+	// Try parsing inline as YAML/JSON first
+	if specs, err := ParseYAMLOrJSONRequestSpecs([]byte(inline)); err == nil {
+		return specs, nil
 	}
 	return ParseRequestSpecs(inline)
 }

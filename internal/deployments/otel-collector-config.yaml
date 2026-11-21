@@ -10,8 +10,6 @@ processors:
   batch:
     timeout: 1s
     send_batch_size: 256
-  probabilistic_sampler/jaeger:
-    sampling_percentage: 1
 
 # Derive consistent RED metrics for both HTTP and gRPC services from spans.
 connectors:
@@ -38,7 +36,7 @@ service:
       exporters: [spanmetrics]
     traces/jaeger:
       receivers: [otlp]
-      processors: [probabilistic_sampler/jaeger, batch]
+      processors: [batch]
       exporters: [otlp/jaeger]
     metrics:
       receivers: [otlp, spanmetrics]

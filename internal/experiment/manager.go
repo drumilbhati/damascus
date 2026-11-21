@@ -109,7 +109,7 @@ func (m *Manager) CreateExperiment(ctx context.Context, targetService, targetURL
 	if targetService == "" || targetURL == "" {
 		return nil, fmt.Errorf("targetService and targetURL must be provided")
 	}
-	if expType != ExperimentRamp && expType != ExperimentStep {
+	if expType != ExperimentRamp && expType != ExperimentStep && expType != ExperimentAIMD {
 		if expType != ExperimentFixed {
 			return nil, fmt.Errorf("unsupported experiment type %q", expType)
 		}
@@ -185,6 +185,9 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 		if err := plan.Validate(); err != nil {
 			return fmt.Errorf("invalid fixed-rate load plan: %w", err)
 		}
+	}
+	if exp.Type == ExperimentAIMD {
+		plan.Type = "aimd"
 	}
 	if exp.State != StateCreated {
 		return fmt.Errorf("experiment %s is not in StateCreated; current state: %s", id, exp.State)
@@ -288,6 +291,14 @@ func (m *Manager) StartExperiment(ctx context.Context, id string, plan stress.Lo
 				}
 				cancelStress()
 			})
+		} else if exp.Type == ExperimentAIMD {
+			if (policy.MaxP95LatencyMs > 0 && snapshot.P95LatencyMs > 0.8*policy.MaxP95LatencyMs) ||
+				(policy.MaxErrorRate > 0 && snapshot.ErrorRate > 0.5*policy.MaxErrorRate) ||
+				(policy.MinAvailability > 0 && snapshot.Availability < policy.MinAvailability+0.02) {
+				if dec, ok := m.stressEngine.(interface{ MultiplicativeDecrease(float64) int }); ok {
+					dec.MultiplicativeDecrease(0.7)
+				}
+			}
 		}
 	}
 	m.watcher.SetSnapshotHandler(handler)

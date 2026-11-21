@@ -238,6 +238,21 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	cfgPath := config.FindConfigFile(os.Getenv("DAMASCUS_CONFIG_FILE"))
+	var fileCfg *config.FileConfig
+	if cfgPath != "" {
+		if fc, loadErr := config.LoadConfigFile(cfgPath); loadErr == nil && fc != nil {
+			fileCfg = fc
+			logger.Info("loaded configuration file", "path", cfgPath, "endpoints", len(fc.Endpoints))
+			if len(requestSpecs) == 0 && len(fc.Endpoints) > 0 {
+				requestSpecs = fc.Endpoints
+			}
+			if len(serviceTargetURLs) == 0 && len(fc.ServiceTargetURLs) > 0 {
+				serviceTargetURLs = fc.ServiceTargetURLs
+			}
+		}
+	}
 	if cfg.TargetBaseURL == "" && len(requestSpecs) > 0 {
 		if u, parseErr := url.Parse(requestSpecs[0].SampleURL()); parseErr == nil {
 			cfg.TargetBaseURL = u.Scheme + "://" + u.Host + "/"
@@ -275,6 +290,50 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	autoCfg.ServiceTargetURLs = serviceTargetURLs
+
+	if fileCfg != nil {
+		if fileCfg.AutoRun.BaselineRPS > 0 {
+			autoCfg.BaselineRate = fileCfg.AutoRun.BaselineRPS
+		}
+		if fileCfg.AutoRun.BaselineSeconds > 0 {
+			autoCfg.BaselineSeconds = fileCfg.AutoRun.BaselineSeconds
+		}
+		if fileCfg.AutoRun.ProbeRPS > 0 {
+			autoCfg.ProbeRate = fileCfg.AutoRun.ProbeRPS
+		}
+		if fileCfg.AutoRun.ProbeSeconds > 0 {
+			autoCfg.ProbeSeconds = fileCfg.AutoRun.ProbeSeconds
+		}
+		if fileCfg.AutoRun.StartDelay > 0 {
+			autoCfg.StartDelay = fileCfg.AutoRun.StartDelay
+		}
+		if fileCfg.AutoRun.Scope != "" {
+			autoCfg.Scope = autorun.Scope(fileCfg.AutoRun.Scope)
+		}
+		if fileCfg.AutoRun.InitialRPS > 0 {
+			autoCfg.Experiment.InitialRate = fileCfg.AutoRun.InitialRPS
+		}
+		if fileCfg.AutoRun.StepRPS > 0 {
+			autoCfg.Experiment.StepRate = fileCfg.AutoRun.StepRPS
+		}
+		if fileCfg.AutoRun.MaxRPS > 0 {
+			autoCfg.Experiment.MaxRate = fileCfg.AutoRun.MaxRPS
+		}
+		if fileCfg.AutoRun.StepSeconds > 0 {
+			autoCfg.Experiment.StepDurationSeconds = fileCfg.AutoRun.StepSeconds
+		}
+		if fileCfg.AutoRun.MaxP95Ms > 0 {
+			autoCfg.Experiment.MaxP95LatencyMs = fileCfg.AutoRun.MaxP95Ms
+		}
+		if fileCfg.AutoRun.MaxErrorPct > 0 {
+			autoCfg.Experiment.MaxErrorRatePercent = fileCfg.AutoRun.MaxErrorPct
+		}
+		if fileCfg.AutoRun.MinAvailabilityPct > 0 {
+			autoCfg.Experiment.MinAvailabilityPct = fileCfg.AutoRun.MinAvailabilityPct
+		}
+	}
+
 	orchestrator := autorun.NewOrchestrator(autoCfg, stressEngine, graphAnalyzer, manager, logger)
 	defer orchestrator.Shutdown()
 	// Jaeger and Prometheus start from .env and can be changed from the UI.

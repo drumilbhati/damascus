@@ -403,6 +403,7 @@ export const ExperimentsPage: React.FC = () => {
               <div>
                 <label className="block text-[11px] font-semibold mb-1" style={{ color: '#8b949e' }}>Strategy</label>
                 <select className={inputCls} style={inputStyle} value={expType} onChange={(e) => setExpType(e.target.value as ExperimentType)}>
+                  <option value="aimd">aimd — additive increase, multiplicative decrease</option>
                   <option value="step">step — hold each load level before increasing</option>
                   <option value="fixed">fixed — hold one request rate</option>
                 </select>

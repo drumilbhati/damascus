@@ -257,3 +257,51 @@ func TestEngine_ConcurrentStartRejected(t *testing.T) {
 		t.Errorf("expected concurrent Start call to be rejected, got nil")
 	}
 }
+
+func TestEngine_AIMD(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	engine := stress.NewEngine(server.Client())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	plan := stress.LoadPlan{
+		TargetURL:           server.URL,
+		Method:              "GET",
+		Type:                "aimd",
+		InitialRate:         10,
+		StepRate:            10,
+		MaxRate:             50,
+		StepDurationSeconds: 1,
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- engine.Start(ctx, plan)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	if r := engine.CurrentRate(); r != 10 {
+		t.Fatalf("expected initial rate 10, got %d", r)
+	}
+
+	time.Sleep(1100 * time.Millisecond)
+	if r := engine.CurrentRate(); r != 20 {
+		t.Fatalf("expected rate 20 after additive step, got %d", r)
+	}
+
+	newRate := engine.MultiplicativeDecrease(0.5)
+	if newRate != 10 {
+		t.Fatalf("expected decreased rate 10, got %d", newRate)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if r := engine.CurrentRate(); r != 10 {
+		t.Fatalf("expected engine rate to reflect decrease to 10, got %d", r)
+	}
+
+	cancel()
+	<-done
+}

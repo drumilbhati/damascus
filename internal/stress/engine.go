@@ -33,11 +33,13 @@ const (
 // using Little's law (workers ≈ rate × latency) as the steady-state target.
 // The pool never exceeds maxInFlight, so slow endpoints cannot exhaust the host.
 type Engine struct {
-	client      *http.Client
-	maxInFlight int
-	mu          sync.Mutex
-	cancel      context.CancelFunc
-	done        chan struct{}
+	client       *http.Client
+	maxInFlight  int
+	mu           sync.Mutex
+	cancel       context.CancelFunc
+	done         chan struct{}
+	rateAdjustCh chan int
+	initialRate  atomic.Int64
 
 	rate      atomic.Int64
 	workers   atomic.Int64
@@ -83,6 +85,29 @@ func NewEngine(client *http.Client, opts ...EngineOption) *Engine {
 
 // CurrentRate is the offered load for the current step, independent of service traffic.
 func (e *Engine) CurrentRate() int { return int(e.rate.Load()) }
+
+// MultiplicativeDecrease reduces current rate multiplicatively by factor (e.g. 0.5 or 0.7),
+// clamped to InitialRate, and notifies the active rate loop.
+func (e *Engine) MultiplicativeDecrease(factor float64) int {
+	if factor <= 0 || factor >= 1.0 {
+		factor = 0.5
+	}
+	current := int(e.rate.Load())
+	initial := int(e.initialRate.Load())
+	if initial <= 0 {
+		initial = 1
+	}
+	newRate := int(float64(current) * factor)
+	if newRate < initial {
+		newRate = initial
+	}
+	e.rate.Store(int64(newRate))
+	select {
+	case e.rateAdjustCh <- newRate:
+	default:
+	}
+	return newRate
+}
 
 // Stats reports the worker pool's current size and throughput counters.
 func (e *Engine) Stats() EngineStats {
@@ -136,6 +161,8 @@ func (e *Engine) Start(ctx context.Context, plan LoadPlan) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	e.cancel, e.done = cancel, done
+	e.rateAdjustCh = make(chan int, 8)
+	e.initialRate.Store(int64(plan.InitialRate))
 	e.mu.Unlock()
 
 	e.latencyNs.Store(0)
@@ -246,33 +273,78 @@ func (e *Engine) Start(ctx context.Context, plan LoadPlan) error {
 		}
 	}
 
-	for rate := plan.InitialRate; ; {
-		e.rate.Store(int64(rate))
-		ticker := time.NewTicker(time.Second / time.Duration(rate))
-		timer := time.NewTimer(time.Duration(plan.StepDurationSeconds) * time.Second)
-		stepDone := false
-		for !stepDone {
-			select {
-			case <-runCtx.Done():
-				stepDone = true
-			case <-timer.C:
-				stepDone = true
-			case <-ticker.C:
-				dispatch(rate)
-			}
-		}
-		ticker.Stop()
-		timer.Stop()
-		if runCtx.Err() != nil {
-			break
-		}
-		if rate == plan.MaxRate {
-			break
-		}
-		if plan.MaxRate-rate < plan.StepRate {
-			rate = plan.MaxRate
+	isAIMD := strings.EqualFold(plan.Type, "aimd")
+	stepSec := plan.StepDurationSeconds
+	if stepSec <= 0 {
+		if isAIMD {
+			stepSec = 5
 		} else {
-			rate += plan.StepRate
+			stepSec = 10
+		}
+	}
+	stepDuration := time.Duration(stepSec) * time.Second
+
+	rate := plan.InitialRate
+	e.rate.Store(int64(rate))
+	ticker := time.NewTicker(time.Second / time.Duration(rate))
+	defer ticker.Stop()
+	timer := time.NewTimer(stepDuration)
+	defer timer.Stop()
+
+	loopDone := false
+	for !loopDone {
+		select {
+		case <-runCtx.Done():
+			loopDone = true
+
+		case <-timer.C:
+			if isAIMD {
+				if rate >= plan.MaxRate {
+					loopDone = true
+					break
+				}
+				if plan.MaxRate-rate < plan.StepRate {
+					rate = plan.MaxRate
+				} else {
+					rate += plan.StepRate
+				}
+				e.rate.Store(int64(rate))
+				ticker.Reset(time.Second / time.Duration(rate))
+				timer.Reset(stepDuration)
+			} else {
+				if rate >= plan.MaxRate {
+					loopDone = true
+					break
+				}
+				if plan.MaxRate-rate < plan.StepRate {
+					rate = plan.MaxRate
+				} else {
+					rate += plan.StepRate
+				}
+				e.rate.Store(int64(rate))
+				ticker.Reset(time.Second / time.Duration(rate))
+				timer.Reset(stepDuration)
+			}
+
+		case newRate := <-e.rateAdjustCh:
+			if newRate > 0 && newRate != rate {
+				rate = newRate
+				e.rate.Store(int64(rate))
+				ticker.Reset(time.Second / time.Duration(rate))
+				timer.Reset(stepDuration)
+			}
+
+		case <-ticker.C:
+			dispatch(rate)
+			if isAIMD && e.missed.Load() > 0 {
+				dropped := e.missed.Swap(0)
+				if dropped > 0 && rate > plan.InitialRate {
+					rate = max(plan.InitialRate, int(float64(rate)*0.7))
+					e.rate.Store(int64(rate))
+					ticker.Reset(time.Second / time.Duration(rate))
+					timer.Reset(stepDuration)
+				}
+			}
 		}
 	}
 	stopErr := runCtx.Err()

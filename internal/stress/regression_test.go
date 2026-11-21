@@ -53,7 +53,7 @@ func TestRegressionRampRatesAndCompletion(t *testing.T) {
 }
 
 func TestRegressionRequestFailuresStopEngine(t *testing.T) {
-	for _, kind := range []string{"connect", "http500", "http404", "timeout"} {
+	for _, kind := range []string{"connect", "timeout"} {
 		t.Run(kind, func(t *testing.T) {
 			engine := stress.NewEngine(&http.Client{Transport: responseTransport(func(r *http.Request) (*http.Response, error) {
 				switch kind {

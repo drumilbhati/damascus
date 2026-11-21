@@ -83,17 +83,17 @@ const RunDetail: React.FC<{ run: AutoRun }> = ({ run }) => {
                 </tr>
               </thead>
               <tbody>
-                {report.services.map((s) => (
-                  <tr key={s.service} style={{ borderTop: '1px solid #21262d', color: '#e6edf3' }} title={s.reasons.join('\n')}>
+                {(report.services ?? []).map((s) => (
+                  <tr key={s.service} style={{ borderTop: '1px solid #21262d', color: '#e6edf3' }} title={(s.reasons ?? []).join('\n')}>
                     <td className="px-3 py-2 font-mono">{s.service}</td>
-                    <td className="px-3 py-2 font-mono">{s.score.toFixed(3)}</td>
-                    <td className="px-3 py-2 font-mono">{(s.critical_share * 100).toFixed(0)}%</td>
+                    <td className="px-3 py-2 font-mono">{(s.score ?? 0).toFixed(3)}</td>
+                    <td className="px-3 py-2 font-mono">{((s.critical_share ?? 0) * 100).toFixed(0)}%</td>
                     <td className="px-3 py-2 font-mono">
-                      {s.baseline_critical_ms.toFixed(1)} → {s.load_critical_ms.toFixed(1)}
-                      {s.inflation > 1.5 && <span style={{ color: '#f85149' }}> ({s.inflation.toFixed(1)}×)</span>}
+                      {(s.baseline_critical_ms ?? 0).toFixed(1)} → {(s.load_critical_ms ?? 0).toFixed(1)}
+                      {(s.inflation ?? 0) > 1.5 && <span style={{ color: '#f85149' }}> ({s.inflation.toFixed(1)}×)</span>}
                     </td>
-                    <td className="px-3 py-2 font-mono">{(s.error_rate * 100).toFixed(1)}%</td>
-                    <td className="px-3 py-2" style={{ color: '#8b949e' }}>{s.requests.join(', ')}</td>
+                    <td className="px-3 py-2 font-mono">{((s.error_rate ?? 0) * 100).toFixed(1)}%</td>
+                    <td className="px-3 py-2" style={{ color: '#8b949e' }}>{(s.requests ?? []).join(', ')}</td>
                   </tr>
                 ))}
               </tbody>
@@ -102,7 +102,7 @@ const RunDetail: React.FC<{ run: AutoRun }> = ({ run }) => {
         </div>
       )}
 
-      {run.experiments.length > 0 && (
+      {(run.experiments?.length ?? 0) > 0 && (
         <div className="rounded overflow-x-auto" style={panel}>
           <table className="w-full text-xs">
             <thead style={{ color: '#6e7681' }}>
@@ -114,7 +114,7 @@ const RunDetail: React.FC<{ run: AutoRun }> = ({ run }) => {
               </tr>
             </thead>
             <tbody>
-              {run.experiments.map((e) => (
+              {(run.experiments ?? []).map((e) => (
                 <tr key={e.request} style={{ borderTop: '1px solid #21262d', color: '#e6edf3' }}>
                   <td className="px-3 py-2">
                     <span className="font-mono">{e.method}</span> {e.request}

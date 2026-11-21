@@ -265,8 +265,8 @@ func (h *Handler) CreateExperiment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if dto.Type != experiment.ExperimentRamp && dto.Type != experiment.ExperimentStep && dto.Type != experiment.ExperimentFixed {
-		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("unsupported experiment type %q; must be 'ramp', 'step', or 'fixed'", dto.Type))
+	if dto.Type != experiment.ExperimentRamp && dto.Type != experiment.ExperimentStep && dto.Type != experiment.ExperimentFixed && dto.Type != experiment.ExperimentAIMD {
+		h.writeError(w, http.StatusBadRequest, fmt.Sprintf("unsupported experiment type %q; must be 'ramp', 'step', 'aimd', or 'fixed'", dto.Type))
 		return
 	}
 

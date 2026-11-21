@@ -129,31 +129,51 @@ func (a *Analyzer) BuildGraph(ctx context.Context, lookbackDuration int64) (*Dep
 	for _, service := range jaegerServices.Data {
 		// Keep registered services even when the selected window has no spans.
 		graph.AddNode(service, nil)
-		queryParams := url.Values{}
-		queryParams.Set("service", service)
-		queryParams.Set("limit", "50")
-		queryParams.Set("lookback", lookbackStr)
 
-		traceURL := fmt.Sprintf("%s/api/traces?%s", jaegerBaseURL, queryParams.Encode())
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, traceURL, nil)
-		if err != nil {
-			return nil, err
-		}
-		resp, err := a.client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-
-		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-			resp.Body.Close()
-			return nil, fmt.Errorf("unexpected status code from jaeger /api/traces: %d", resp.StatusCode)
-		}
-
+		// Fetch traces for this service. We attempt with limit=20, and fall back to 10 and 5
+		// to gracefully bypass any traces containing NaN or malformed float values in Jaeger's serializer.
 		var jaegerResp jaegerResponse
-		err = json.NewDecoder(resp.Body).Decode(&jaegerResp)
-		resp.Body.Close()
-		if err != nil {
-			return nil, err
+		var lastErr error
+		success := false
+
+		for _, lim := range []string{"20", "10", "5"} {
+			queryParams := url.Values{}
+			queryParams.Set("service", service)
+			queryParams.Set("limit", lim)
+			queryParams.Set("lookback", lookbackStr)
+
+			traceURL := fmt.Sprintf("%s/api/traces?%s", jaegerBaseURL, queryParams.Encode())
+			traceReq, err := http.NewRequestWithContext(ctx, http.MethodGet, traceURL, nil)
+			if err != nil {
+				return nil, err
+			}
+			traceResp, err := a.client.Do(traceReq)
+			if err != nil {
+				lastErr = err
+				break
+			}
+
+			if traceResp.StatusCode < http.StatusOK || traceResp.StatusCode >= http.StatusMultipleChoices {
+				traceResp.Body.Close()
+				lastErr = fmt.Errorf("unexpected status code from jaeger /api/traces: %d", traceResp.StatusCode)
+				continue
+			}
+
+			var candidate jaegerResponse
+			err = json.NewDecoder(traceResp.Body).Decode(&candidate)
+			traceResp.Body.Close()
+			if err != nil {
+				lastErr = err
+				continue
+			}
+
+			jaegerResp = candidate
+			success = true
+			break
+		}
+
+		if !success {
+			return nil, lastErr
 		}
 
 		// 3. Iterate through traces and spans:

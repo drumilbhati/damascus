@@ -173,6 +173,25 @@ func TestOrchestrator_FindsBottleneckAndTestsReachingRequests(t *testing.T) {
 	}
 }
 
+func TestOrchestrator_TargetsDirectServiceURLWhenConfigured(t *testing.T) {
+	cfg := testConfig()
+	cfg.ServiceTargetURLs = map[string]string{
+		"db": "http://direct-db-gateway:8090/v1/db/status",
+	}
+	mgr := &fakeManager{exps: map[string]*experiment.Experiment{}}
+	o := NewOrchestrator(cfg, &fakeLoad{}, &fakeTraces{}, mgr, nil)
+	if _, err := o.Start(context.Background(), 0); err != nil {
+		t.Fatal(err)
+	}
+	run := waitDone(t, o)
+	if run.State != RunCompleted {
+		t.Fatalf("run failed: %+v", run)
+	}
+	if len(mgr.created) != 1 || mgr.created[0] != "db http://direct-db-gateway:8090/v1/db/status" {
+		t.Fatalf("expected experiment targeting direct service URL, got %v", mgr.created)
+	}
+}
+
 func TestOrchestrator_ScopeAllTestsEveryRequest(t *testing.T) {
 	cfg := testConfig()
 	cfg.Scope = ScopeAll

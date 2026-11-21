@@ -419,7 +419,24 @@ func AnalyzeBottlenecks(samples []TraceSample, structural []ServiceScore) Bottle
 	})
 	report.Services = rows
 	if len(rows) > 0 {
-		report.Bottleneck = rows[0].Service
+		entryServices := map[string]bool{}
+		for _, entry := range report.EntryServices {
+			entryServices[entry] = true
+		}
+		var bestService string
+		for _, r := range rows {
+			// If there are downstream microservices present, do not choose the ingress entrypoint as the bottleneck
+			if len(rows) > len(entryServices) && entryServices[r.Service] {
+				continue
+			}
+			bestService = r.Service
+			break
+		}
+		if bestService != "" {
+			report.Bottleneck = bestService
+		} else {
+			report.Bottleneck = rows[0].Service
+		}
 	}
 	return report
 }

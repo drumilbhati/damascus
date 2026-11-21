@@ -59,7 +59,7 @@ export const TelemetrySourcesPanel: React.FC<Props> = ({ onApplied, onDirtyChang
         prometheus_url: values.prometheus_url.trim(),
       });
       await mutate(next, { revalidate: false });
-      setMessage({ kind: 'ok', text: 'Both APIs answered; Damascus now reads traces and metrics from these sources.' });
+      setMessage({ kind: 'ok', text: 'Both APIs answered; Damascus is connected to these sources.' });
       onApplied?.();
     } catch (err) {
       const data = (err as { response?: { data?: TelemetryErrorResponse } })?.response?.data;
@@ -73,7 +73,14 @@ export const TelemetrySourcesPanel: React.FC<Props> = ({ onApplied, onDirtyChang
   return (
     <div className="rounded p-3 space-y-3" style={{ border: '1px solid #30363d', backgroundColor: '#0d1117' }}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-[11px] font-semibold" style={{ color: '#e6edf3' }}>Telemetry sources</span>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-semibold" style={{ color: '#e6edf3' }}>Telemetry sources</span>
+          {settings && !dirty && (
+            <span className="rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold" style={{ color: '#3fb950', backgroundColor: 'rgba(63,185,80,0.12)' }}>
+              CONNECTED
+            </span>
+          )}
+        </div>
         {settings && (
           <span className="text-[10px]" style={{ color: '#6e7681' }}>
             {settings.origin === 'ui' && settings.updated_at
@@ -112,12 +119,12 @@ export const TelemetrySourcesPanel: React.FC<Props> = ({ onApplied, onDirtyChang
         <button
           type="button"
           onClick={apply}
-          disabled={saving || !settings || !dirty}
-          className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-semibold disabled:opacity-50"
+          disabled={saving || !settings}
+          className="inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-semibold disabled:opacity-50 cursor-pointer"
           style={{ backgroundColor: '#21262d', border: '1px solid #30363d', color: '#e6edf3' }}
         >
           <Plug className="h-3 w-3" />
-          {saving ? 'Testing…' : 'Test & connect'}
+          {saving ? 'Testing…' : dirty ? 'Test & connect' : 'Test connection'}
         </button>
         {message && (
           <span role="status" className="inline-flex items-center gap-1 text-[11px]" style={{ color: message.kind === 'ok' ? '#3fb950' : '#f85149' }}>

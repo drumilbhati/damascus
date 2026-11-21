@@ -10,6 +10,7 @@ type LoadPlan struct {
 	TargetURL           string `json:"target_url"`
 	Method              string `json:"method"` // GET, POST, etc.
 	Payload             string `json:"payload,omitempty"`
+	Type                string `json:"type,omitempty"` // "step", "ramp", "fixed", "aimd"
 	InitialRate         int    `json:"initial_rate"`
 	StepRate            int    `json:"step_rate"`
 	MaxRate             int    `json:"max_rate"`

@@ -39,27 +39,28 @@ type ExperimentRunner interface {
 	GetStatus(ctx context.Context, id string) (*experiment.Experiment, error)
 }
 
-// Scope selects which requests get a capacity experiment.
+// Scope decides which requests get a capacity experiment after the bottleneck is found.
 type Scope string
 
 const (
-	ScopeBottleneck Scope = "bottleneck" // only requests whose traces reach the bottleneck
-	ScopeAll        Scope = "all"        // every eligible request
+	ScopeBottleneck Scope = "bottleneck"
+	ScopeAll        Scope = "all"
 )
 
 // Config controls discovery traffic and the experiments that follow.
 type Config struct {
-	Requests        []stress.RequestSpec
-	BaselineRate    int
-	BaselineSeconds int
-	ProbeRate       int
-	ProbeSeconds    int
-	TracesPerPhase  int
-	TraceSettle     time.Duration
-	Scope           Scope
-	Experiment      experiment.ExperimentConfig
-	StartDelay      time.Duration
-	PollInterval    time.Duration
+	Requests          []stress.RequestSpec
+	ServiceTargetURLs map[string]string
+	BaselineRate      int
+	BaselineSeconds   int
+	ProbeRate         int
+	ProbeSeconds      int
+	TracesPerPhase    int
+	TraceSettle       time.Duration
+	Scope             Scope
+	Experiment        experiment.ExperimentConfig
+	StartDelay        time.Duration
+	PollInterval      time.Duration
 }
 
 // DefaultConfig returns conservative settings suitable for a disposable test environment.
@@ -77,7 +78,7 @@ func DefaultConfig() Config {
 			InitialRate:         10,
 			StepRate:            10,
 			MaxRate:             100,
-			StepDurationSeconds: 40,
+			StepDurationSeconds: 5,
 			MaxP95LatencyMs:     1000,
 			MaxErrorRatePercent: 5,
 			MinAvailabilityPct:  95,
@@ -405,7 +406,7 @@ func (o *Orchestrator) execute(ctx context.Context, run *Run) error {
 
 	// 3. Run capacity experiments for the requests that exercise the bottleneck.
 	o.update(run, func(r *Run) { r.State = RunTesting })
-	targets := selectTargets(eligible, report, o.cfg.Scope)
+	targets := o.selectTargets(eligible, report, o.cfg.Scope)
 	if len(targets) == 0 {
 		return fmt.Errorf("no configured request reaches bottleneck %q", report.Bottleneck)
 	}
@@ -455,7 +456,36 @@ func reaches(report graph.BottleneckReport, request, service string) bool {
 	return false
 }
 
-func selectTargets(specs []stress.RequestSpec, report graph.BottleneckReport, scope Scope) []stress.RequestSpec {
+func (o *Orchestrator) selectTargets(specs []stress.RequestSpec, report graph.BottleneckReport, scope Scope) []stress.RequestSpec {
+	if scope == ScopeBottleneck && report.Bottleneck != "" {
+		// Priority 1: Check if a direct target URL is configured for the bottleneck service
+		if directURL, ok := o.cfg.ServiceTargetURLs[report.Bottleneck]; ok && directURL != "" {
+			for _, s := range specs {
+				if s.URL == directURL {
+					return []stress.RequestSpec{s}
+				}
+			}
+			return []stress.RequestSpec{
+				{
+					Name:          report.Bottleneck + "-target",
+					Service:       report.Bottleneck,
+					Method:        "GET",
+					URL:           directURL,
+					Weight:        1,
+					AllowMutation: false,
+				},
+			}
+		}
+
+		// Priority 2: Check if any configured request spec directly specifies this service
+		for _, s := range specs {
+			if s.Service != "" && strings.EqualFold(s.Service, report.Bottleneck) {
+				return []stress.RequestSpec{s}
+			}
+		}
+	}
+
+	// Fallback: Requests that reach the bottleneck through distributed trace paths
 	var out []stress.RequestSpec
 	for _, spec := range specs {
 		if _, seen := report.Reachability[spec.Name]; !seen {
@@ -491,11 +521,6 @@ func (o *Orchestrator) generate(ctx context.Context, specs []stress.RequestSpec,
 		},
 	}
 	err := o.load.Start(ctx, plan)
-	if errors.Is(err, stress.ErrInFlightLimit) {
-		// The generator saturated; the traces already collected are still useful.
-		o.logger.Warn("discovery traffic saturated the load generator", "rate", rate, "error", err)
-		err = nil
-	}
 	mu.Lock()
 	defer mu.Unlock()
 	return records, err
@@ -554,7 +579,7 @@ func (o *Orchestrator) fetchTraces(ctx context.Context, samples []graph.TraceSam
 
 func (o *Orchestrator) runExperiment(ctx context.Context, spec stress.RequestSpec, target string, onUpdate func(*experiment.Experiment)) (*experiment.Experiment, error) {
 	cfg := o.cfg.Experiment
-	expType := experiment.ExperimentStep
+	expType := experiment.ExperimentAIMD
 	if cfg.StepRate == 0 || cfg.MaxRate == cfg.InitialRate {
 		expType = experiment.ExperimentFixed
 	}
@@ -566,6 +591,7 @@ func (o *Orchestrator) runExperiment(ctx context.Context, spec stress.RequestSpe
 	plan := stress.LoadPlan{
 		TargetURL:           spec.SampleURL(),
 		Method:              spec.Method,
+		Type:                string(expType),
 		Requests:            []stress.RequestSpec{spec},
 		InitialRate:         cfg.InitialRate,
 		StepRate:            cfg.StepRate,
