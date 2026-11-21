@@ -7,11 +7,11 @@ export const AppLayout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="flex min-h-screen flex-col" style={{ backgroundColor: '#0d1117', color: '#e6edf3' }}>
+    <div className="flex h-screen flex-col overflow-hidden" style={{ backgroundColor: '#0d1117', color: '#e6edf3' }}>
       <Navbar onToggleSidebar={() => setSidebarOpen((prev) => !prev)} />
-      <div className="flex flex-1">
+      <div className="flex flex-1 min-h-0 overflow-hidden">
         <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
-        <main className="flex-1 overflow-x-hidden p-4 sm:p-6">
+        <main className="flex-1 min-w-0 overflow-y-auto p-4 sm:p-6">
           <div className="mx-auto max-w-7xl">
             <Outlet />
           </div>

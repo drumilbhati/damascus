@@ -54,7 +54,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
       )}
 
       <aside
-        className={`fixed top-12 bottom-0 left-0 z-40 flex w-[220px] flex-col md:static md:translate-x-0 ${
+        className={`fixed top-12 bottom-0 left-0 z-40 flex w-[220px] shrink-0 flex-col md:static md:translate-x-0 md:h-full md:z-auto ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
         style={{
@@ -123,7 +123,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
         </nav>
 
         {/* Bottom info */}
-        <div className="px-3 py-3" style={{ borderTop: '1px solid #30363d' }}>
+        <div className="px-3 py-3 shrink-0" style={{ borderTop: '1px solid #30363d' }}>
           <div className="flex items-center justify-between">
             <span className="font-mono text-[10px]" style={{ color: '#6e7681' }}>damascus-engine</span>
             <span
