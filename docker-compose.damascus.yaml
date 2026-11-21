@@ -1,0 +1,149 @@
+# ==============================================================================
+# DAMASCUS RESILIENCE & CAPACITY CONTROL PLATFORM
+# Control Plane + Web Dashboard + Persistence (Postgres & Kafka)
+# ==============================================================================
+# This stack is the autonomous chaos and capacity profiling platform.
+# It connects to external or containerized target meshes via:
+#   1. Jaeger Traces API    (e.g. http://jaeger:16686 or http://host.docker.internal:16686)
+#   2. Prometheus Query API (e.g. http://prometheus:9090 or http://host.docker.internal:9090)
+#   3. Target Ingress URL   (e.g. http://frontend:8080 or http://host.docker.internal:8085)
+# ==============================================================================
+
+networks:
+  damascus-net:
+    name: damascus-net
+
+volumes:
+  postgres-data:
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1. DAMASCUS Control Plane (Go backend)
+  # ---------------------------------------------------------------------------
+  damascus-control-plane:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: damascus-control-plane
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"
+    volumes:
+      - ./damascus.yaml:/app/damascus.yaml:ro
+    environment:
+      - PORT=${PORT:-8080}
+      - POSTGRES_DSN=${POSTGRES_DSN:-postgres://damascus:damascus@postgres:5432/damascus?sslmode=disable}
+      - PROMETHEUS_URL=${PROMETHEUS_URL:-http://prometheus:9090}
+      - JAEGER_URL=${JAEGER_URL:-http://jaeger:16686}
+      - KAFKA_BROKERS=${KAFKA_BROKERS:-kafka:29092}
+      - TARGET_BASE_URL=${TARGET_BASE_URL:-}
+      - DAMASCUS_CONFIG_FILE=${DAMASCUS_CONFIG_FILE:-damascus.yaml}
+      - SERVICE_TARGET_URLS=${SERVICE_TARGET_URLS:-}
+      - STRESS_MAX_IN_FLIGHT=${STRESS_MAX_IN_FLIGHT:-2048}
+      - DAMASCUS_ENDPOINTS=${DAMASCUS_ENDPOINTS:-}
+      - DAMASCUS_ENDPOINTS_FILE=${DAMASCUS_ENDPOINTS_FILE:-}
+      - AUTO_RUN=${AUTO_RUN:-false}
+      - AUTO_RUN_START_DELAY_SECONDS=${AUTO_RUN_START_DELAY_SECONDS:-60}
+      - AUTO_RUN_TEST_SCOPE=${AUTO_RUN_TEST_SCOPE:-bottleneck}
+      - AUTO_RUN_BASELINE_RPS=${AUTO_RUN_BASELINE_RPS:-}
+      - AUTO_RUN_BASELINE_SECONDS=${AUTO_RUN_BASELINE_SECONDS:-}
+      - AUTO_RUN_PROBE_RPS=${AUTO_RUN_PROBE_RPS:-}
+      - AUTO_RUN_PROBE_SECONDS=${AUTO_RUN_PROBE_SECONDS:-}
+      - AUTO_RUN_INITIAL_RPS=${AUTO_RUN_INITIAL_RPS:-}
+      - AUTO_RUN_STEP_RPS=${AUTO_RUN_STEP_RPS:-}
+      - AUTO_RUN_MAX_RPS=${AUTO_RUN_MAX_RPS:-}
+      - AUTO_RUN_STEP_SECONDS=${AUTO_RUN_STEP_SECONDS:-}
+      - AUTO_RUN_MAX_P95_MS=${AUTO_RUN_MAX_P95_MS:-}
+      - AUTO_RUN_MAX_ERROR_PCT=${AUTO_RUN_MAX_ERROR_PCT:-}
+      - AUTO_RUN_MIN_AVAILABILITY_PCT=${AUTO_RUN_MIN_AVAILABILITY_PCT:-}
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 ${PORT:-8080} || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    networks:
+      - damascus-net
+
+  # ---------------------------------------------------------------------------
+  # 2. DAMASCUS Web Dashboard UI (React + Vite)
+  # ---------------------------------------------------------------------------
+  damascus-ui:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: damascus-ui
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3000}:80"
+    environment:
+      - PORT=80
+      - BACKEND_URL=http://damascus-control-plane:${PORT:-8080}
+      - NGINX_ENVSUBST_FILTER=BACKEND_URL|PORT
+    depends_on:
+      damascus-control-plane:
+        condition: service_healthy
+    networks:
+      - damascus-net
+
+  # ---------------------------------------------------------------------------
+  # 3. Persistence Store (PostgreSQL 16)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: damascus-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-damascus}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-damascus}
+      - POSTGRES_DB=${POSTGRES_DB:-damascus}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-damascus} -d ${POSTGRES_DB:-damascus}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - damascus-net
+
+  # ---------------------------------------------------------------------------
+  # 4. Event Streaming Backbone (Apache Kafka & Zookeeper)
+  # ---------------------------------------------------------------------------
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: damascus-zookeeper
+    restart: unless-stopped
+    environment:
+      - ZOOKEEPER_CLIENT_PORT=2181
+      - ZOOKEEPER_TICK_TIME=2000
+    networks:
+      - damascus-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: damascus-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      - KAFKA_BROKER_ID=1
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:29092
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT_INTERNAL
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+    depends_on:
+      - zookeeper
+    networks:
+      - damascus-net

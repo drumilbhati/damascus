@@ -1,0 +1,164 @@
+# ==============================================================================
+# DAMASCUS — System Configuration (YAML)
+# ==============================================================================
+# This configuration file defines:
+# 1. Telemetry endpoints to scrape aggregated Jaeger traces & Prometheus metrics.
+# 2. Target service endpoints & payload skeletons for dynamic traffic workers.
+# 3. Autonomous discovery and closed-loop stress test execution parameters.
+# ==============================================================================
+
+version: "1.0"
+
+# ------------------------------------------------------------------------------
+# 1. Telemetry Scraping Endpoints (Aggregated across all services)
+# ------------------------------------------------------------------------------
+telemetry:
+  jaeger_url: "http://jaeger:16686"
+  prometheus_url: "http://prometheus:9090"
+
+# ------------------------------------------------------------------------------
+# 2. Client-Provided Endpoints & Payload Skeletons
+# ------------------------------------------------------------------------------
+# Damascus workers generate traffic against these endpoints to discover the
+# full service mesh topology through distributed tracing.
+#
+# Supported placeholders for dynamic data generation per worker request:
+#   {{uuid}}      - Replaced with a freshly generated random UUID v4
+#   {{seq}}       - Replaced with a monotonically increasing integer
+#   {{timestamp}} - Replaced with current epoch timestamp in milliseconds
+# ------------------------------------------------------------------------------
+endpoints:
+  # --- Ingress Operations (Frontend) ---
+  - name: list-products
+    service: frontend
+    method: GET
+    url: "http://frontend:8080/api/products"
+    weight: 3
+
+  - name: product-detail
+    service: frontend
+    method: GET
+    url: "http://frontend:8080/api/products/OLJCESPC7Z"
+    weight: 2
+
+  - name: recommendations
+    service: frontend
+    method: GET
+    url: "http://frontend:8080/api/recommendations?productIds=OLJCESPC7Z"
+    weight: 2
+
+  - name: view-cart
+    service: frontend
+    method: GET
+    url: "http://frontend:8080/api/cart"
+    weight: 2
+
+  - name: add-to-cart
+    service: frontend
+    method: POST
+    url: "http://frontend:8080/api/cart"
+    headers:
+      Content-Type: "application/json"
+    body: |
+      {
+        "item": {
+          "productId": "OLJCESPC7Z",
+          "quantity": 1
+        },
+        "userId": "damascus-{{uuid}}"
+      }
+    weight: 2
+    allow_mutation: true
+
+  # --- Microservice Operations (Gateway -> Specific Downstream Services) ---
+  - name: catalog-products
+    service: productcatalogservice
+    method: GET
+    url: "http://otel-demo-http-gateway:8090/v1/ProductCatalogService/ListProducts"
+    weight: 2
+
+  - name: currency-convert
+    service: currencyservice
+    method: GET
+    url: "http://otel-demo-http-gateway:8090/v1/CurrencyService/Convert?request=%7B%22from%22%3A%7B%22currencyCode%22%3A%22USD%22%2C%22units%22%3A1%7D%2C%22toCode%22%3A%22EUR%22%7D"
+    weight: 2
+
+  - name: shipping-quote
+    service: shippingservice
+    method: GET
+    url: "http://otel-demo-http-gateway:8090/v1/ShippingService/GetQuote?request=%7B%22address%22%3A%7B%22streetAddress%22%3A%221600%20Amphitheatre%20Parkway%22%2C%22city%22%3A%22Mountain%20View%22%2C%22state%22%3A%22CA%22%2C%22country%22%3A%22US%22%2C%22zipCode%22%3A%2294043%22%7D%2C%22items%22%3A%5B%7B%22productId%22%3A%22OLJCESPC7Z%22%2C%22quantity%22%3A1%7D%5D%7D"
+    weight: 2
+
+  - name: get-ads
+    service: adservice
+    method: GET
+    url: "http://otel-demo-http-gateway:8090/v1/AdService/GetAds"
+    weight: 2
+
+  - name: place-order
+    service: checkoutservice
+    method: POST
+    url: "http://otel-demo-http-gateway:8090/v1/CheckoutService/PlaceOrder"
+    headers:
+      Content-Type: "application/json"
+    body: |
+      {
+        "userId": "damascus-{{uuid}}",
+        "userCurrency": "USD",
+        "address": {
+          "streetAddress": "1600 Amphitheatre Parkway",
+          "city": "Mountain View",
+          "state": "CA",
+          "country": "US",
+          "zipCode": "94043"
+        },
+        "email": "load-test-{{seq}}@example.com",
+        "creditCard": {
+          "creditCardNumber": "4111111111111111",
+          "creditCardCvv": 123,
+          "creditCardExpirationYear": 2030,
+          "creditCardExpirationMonth": 12
+        }
+      }
+    weight: 1
+    allow_mutation: true
+
+# ------------------------------------------------------------------------------
+# Direct service target mappings (keyed by Jaeger/Prometheus service.name)
+# ------------------------------------------------------------------------------
+service_target_urls:
+  cartservice: "http://otel-demo-http-gateway:8090/v1/CartService/GetCart?request=%7B%22userId%22%3A%22damascus-load-test%22%7D"
+  recommendationservice: "http://otel-demo-http-gateway:8090/v1/RecommendationService/ListRecommendations"
+  productcatalogservice: "http://otel-demo-http-gateway:8090/v1/ProductCatalogService/ListProducts"
+  shippingservice: "http://otel-demo-http-gateway:8090/v1/ShippingService/GetQuote?request=%7B%22address%22%3A%7B%22streetAddress%22%3A%221600%20Amphitheatre%20Parkway%22%2C%22city%22%3A%22Mountain%20View%22%2C%22state%22%3A%22CA%22%2C%22country%22%3A%22US%22%2C%22zipCode%22%3A%2294043%22%7D%2C%22items%22%3A%5B%7B%22productId%22%3A%22OLJCESPC7Z%22%2C%22quantity%22%3A1%7D%5D%7D"
+  currencyservice: "http://otel-demo-http-gateway:8090/v1/CurrencyService/Convert?request=%7B%22from%22%3A%7B%22currencyCode%22%3A%22USD%22%2C%22units%22%3A1%7D%2C%22toCode%22%3A%22EUR%22%7D"
+  paymentservice: "http://otel-demo-http-gateway:8090/v1/PaymentService/Charge"
+  checkoutservice: "http://otel-demo-http-gateway:8090/v1/CheckoutService/PlaceOrder"
+  adservice: "http://otel-demo-http-gateway:8090/v1/AdService/GetAds"
+  quoteservice: "http://otel-demo-http-gateway:8090/v1/quoteservice/getquote?request=%7B%22numberOfItems%22%3A1%7D"
+  emailservice: "http://otel-demo-http-gateway:8090/v1/emailservice/send_order_confirmation"
+
+# ------------------------------------------------------------------------------
+# 3. Pipeline & Capacity Experiment Tuning
+# ------------------------------------------------------------------------------
+autorun:
+  enabled: false
+  start_delay: 10s
+  scope: "bottleneck"
+
+  # Phase 1: Dynamic worker discovery traffic
+  baseline_rps: 4
+  baseline_seconds: 15
+  probe_rps: 20
+  probe_seconds: 25
+
+  # Phase 2 & 3: Automated stepped stress experiment against bottleneck service
+  initial_rps: 10
+  step_rps: 100
+  max_rps: 1000
+  step_seconds: 5
+
+  # Closed-loop safety stop invariants (SLA thresholds)
+  max_p95_ms: 1000
+  max_error_pct: 5
+  min_availability_pct: 95

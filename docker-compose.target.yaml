@@ -1,0 +1,333 @@
+# ==============================================================================
+# TARGET SYSTEM & OBSERVABILITY STACK
+# OpenTelemetry Astronomy Shop Microservices + Jaeger & Prometheus
+# ==============================================================================
+# This stack represents the client application under test.
+# It exposes:
+#   - Target Ingress:              http://localhost:8085/
+#   - 1. Jaeger Traces Endpoint:    http://localhost:16686/
+#   - 2. Prometheus Query Endpoint: http://localhost:9090/
+#   - HTTP/gRPC Adapter Gateway:   http://localhost:8090/
+# ==============================================================================
+
+networks:
+  damascus-net:
+    name: damascus-net
+
+volumes:
+  prometheus-data:
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1. Observability Backends (Exposed to DAMASCUS)
+  # ---------------------------------------------------------------------------
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: damascus-jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686" # Jaeger Query API & Web UI
+      - "4317"        # OTLP gRPC receiver
+    networks:
+      - damascus-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: damascus-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./internal/deployments/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"   # Prometheus PromQL API & Web UI
+    networks:
+      - damascus-net
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    container_name: damascus-otel-collector
+    restart: unless-stopped
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./internal/deployments/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP gRPC receiver
+      - "4318:4318"   # OTLP HTTP receiver
+    depends_on:
+      - jaeger
+      - prometheus
+    networks:
+      - damascus-net
+
+  # ---------------------------------------------------------------------------
+  # 2. Target Mesh Microservices (OpenTelemetry Astronomy Shop)
+  # ---------------------------------------------------------------------------
+  flagd:
+    image: ghcr.io/open-feature/flagd:latest
+    container_name: damascus-flagd
+    restart: unless-stopped
+    command: ["start", "--uri", "file:/etc/flagd/demo.flagd.json"]
+    volumes:
+      - ./internal/deployments/flagd:/etc/flagd:ro
+    ports:
+      - "8013:8013"
+    environment:
+      - PORT=8013
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=flagd
+    depends_on:
+      - otel-collector
+    networks:
+      - damascus-net
+
+  frontend:
+    image: ghcr.io/open-telemetry/demo:1.11.0-frontend
+    container_name: damascus-frontend
+    restart: unless-stopped
+    ports:
+      - "8085:8080" # Application ingress reachable on host
+    environment:
+      - PORT=8080
+      - FRONTEND_PORT=8080
+      - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
+      - CURRENCY_SERVICE_ADDR=currencyservice:7001
+      - CART_SERVICE_ADDR=cartservice:8080
+      - RECOMMENDATION_SERVICE_ADDR=recommendationservice:8080
+      - SHIPPING_SERVICE_ADDR=shippingservice:50050
+      - CHECKOUT_SERVICE_ADDR=checkoutservice:5050
+      - AD_SERVICE_ADDR=adservice:9555
+      - FRONTEND_ADDR=frontend:8080
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=frontend
+    depends_on:
+      - otel-collector
+      - productcatalogservice
+      - currencyservice
+      - cartservice
+    networks:
+      - damascus-net
+
+  valkey-cart:
+    image: valkey/valkey:7.2-alpine
+    container_name: damascus-valkey-cart
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - damascus-net
+
+  cartservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-cartservice
+    container_name: damascus-cartservice
+    restart: unless-stopped
+    environment:
+      - PORT=8080
+      - CART_SERVICE_PORT=8080
+      - ASPNETCORE_URLS=http://*:8080
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
+      - VALKEY_ADDR=valkey-cart:6379
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=cartservice
+    depends_on:
+      - otel-collector
+      - valkey-cart
+    networks:
+      - damascus-net
+
+  productcatalogservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-productcatalogservice
+    container_name: damascus-productcatalogservice
+    restart: unless-stopped
+    environment:
+      - PORT=3550
+      - PRODUCT_CATALOG_SERVICE_PORT=3550
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=productcatalogservice
+    depends_on:
+      - otel-collector
+      - flagd
+    networks:
+      - damascus-net
+
+  currencyservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-currencyservice
+    container_name: damascus-currencyservice
+    restart: unless-stopped
+    environment:
+      - PORT=7001
+      - CURRENCY_SERVICE_PORT=7001
+      - VERSION=1.11.0
+      - OTEL_RESOURCE_ATTRIBUTES=service.name=currencyservice
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=currencyservice
+    depends_on:
+      - otel-collector
+    networks:
+      - damascus-net
+
+  paymentservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-paymentservice
+    container_name: damascus-paymentservice
+    restart: unless-stopped
+    environment:
+      - PORT=50051
+      - PAYMENT_SERVICE_PORT=50051
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=paymentservice
+    depends_on:
+      - otel-collector
+      - flagd
+    networks:
+      - damascus-net
+
+  shippingservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-shippingservice
+    container_name: damascus-shippingservice
+    restart: unless-stopped
+    environment:
+      - PORT=50050
+      - SHIPPING_SERVICE_PORT=50050
+      - QUOTE_SERVICE_ADDR=http://quoteservice:8090
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=shippingservice
+    depends_on:
+      - otel-collector
+    networks:
+      - damascus-net
+
+  quoteservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-quoteservice
+    container_name: damascus-quoteservice
+    restart: unless-stopped
+    environment:
+      - QUOTE_SERVICE_PORT=8090
+      - OTEL_PHP_AUTOLOAD_ENABLED=true
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      - OTEL_SERVICE_NAME=quoteservice
+    depends_on:
+      - otel-collector
+    networks:
+      - damascus-net
+
+  emailservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-emailservice
+    container_name: damascus-emailservice
+    restart: unless-stopped
+    environment:
+      - PORT=6060
+      - EMAIL_SERVICE_PORT=6060
+      - APP_ENV=production
+      - OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://otel-collector:4318/v1/traces
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=emailservice
+    depends_on:
+      - otel-collector
+    networks:
+      - damascus-net
+
+  checkoutservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-checkoutservice
+    container_name: damascus-checkoutservice
+    restart: unless-stopped
+    environment:
+      - PORT=5050
+      - CHECKOUT_SERVICE_PORT=5050
+      - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
+      - SHIPPING_SERVICE_ADDR=shippingservice:50050
+      - PAYMENT_SERVICE_ADDR=paymentservice:50051
+      - EMAIL_SERVICE_ADDR=http://emailservice:6060
+      - CURRENCY_SERVICE_ADDR=currencyservice:7001
+      - CART_SERVICE_ADDR=cartservice:8080
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=checkoutservice
+    depends_on:
+      - otel-collector
+      - flagd
+    networks:
+      - damascus-net
+
+  recommendationservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-recommendationservice
+    container_name: damascus-recommendationservice
+    restart: unless-stopped
+    environment:
+      - PORT=8080
+      - RECOMMENDATION_SERVICE_PORT=8080
+      - PRODUCT_CATALOG_SERVICE_ADDR=productcatalogservice:3550
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=recommendationservice
+    depends_on:
+      - otel-collector
+      - flagd
+    networks:
+      - damascus-net
+
+  adservice:
+    image: ghcr.io/open-telemetry/demo:1.11.0-adservice
+    container_name: damascus-adservice
+    restart: unless-stopped
+    environment:
+      - PORT=9555
+      - AD_SERVICE_PORT=9555
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      - OTEL_SERVICE_NAME=adservice
+    depends_on:
+      - otel-collector
+      - flagd
+    networks:
+      - damascus-net
+
+  loadgenerator:
+    image: ghcr.io/open-telemetry/demo:1.11.0-loadgenerator
+    container_name: damascus-loadgenerator
+    restart: unless-stopped
+    environment:
+      - LOCUST_HOST=http://frontend:8080
+      - LOCUST_USERS=10
+      - LOCUST_HEADLESS=true
+      - LOCUST_AUTOSTART=true
+      - LOCUST_WEB_PORT=8089
+      - FLAGD_HOST=flagd
+      - FLAGD_PORT=8013
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_SERVICE_NAME=loadgenerator
+    depends_on:
+      - frontend
+    networks:
+      - damascus-net
+
+  otel-demo-http-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.otel-gateway
+    container_name: damascus-otel-demo-http-gateway
+    restart: unless-stopped
+    ports:
+      - "8090:8090"
+    depends_on:
+      - cartservice
+      - recommendationservice
+      - productcatalogservice
+      - shippingservice
+      - currencyservice
+      - paymentservice
+      - checkoutservice
+      - adservice
+      - quoteservice
+      - emailservice
+    networks:
+      - damascus-net
